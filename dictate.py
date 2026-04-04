@@ -76,6 +76,7 @@ class _ASR(FasterWhisperASR):
 class Dictation:
     def __init__(self):
         self.recording = False
+        self.processing = False
         self.record_process = None
         self.online = None
         self.model_loaded = threading.Event()
@@ -87,7 +88,6 @@ class Dictation:
         self._audio_queue = queue.Queue()
         self._raw_audio = bytearray()
         self._full_text = []
-        self._uncommitted_typed = ""
 
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -136,7 +136,7 @@ class Dictation:
             self.start_recording()
 
     def start_recording(self):
-        if self.recording or self.model_error:
+        if self.recording or self.processing or self.model_error:
             return
 
         self.model_loaded.wait()
@@ -149,7 +149,6 @@ class Dictation:
         self._audio_queue = queue.Queue()
         self._raw_audio = bytearray()
         self._full_text = []
-        self._uncommitted_typed = ""
         self.online.init()
 
         self.record_process = subprocess.Popen(
@@ -198,7 +197,7 @@ class Dictation:
             self.online.insert_audio_chunk(np.concatenate(chunks))
 
     def _transcription_loop(self):
-        """Poll-based loop: drain audio, transcribe, type confirmed + uncommitted text."""
+        """Poll-based loop: drain audio, transcribe, type confirmed text."""
         min_chunk = CONFIG["min_chunk_size"]
         last_process = time.time()
         while not self._stop_event.is_set():
@@ -217,17 +216,9 @@ class Dictation:
                 last_process = time.time()
                 _beg, _end, committed = result
 
-                uncommitted_words = self.online.transcript_buffer.complete()
-                uncommitted = self.online.to_flush(uncommitted_words)[2]
-
-                if committed or uncommitted != self._uncommitted_typed:
-                    if self._uncommitted_typed:
-                        self._backspace(len(self._uncommitted_typed))
-                    if committed:
-                        self._type_text(committed)
-                        self._full_text.append(committed)
-                    self._type_text(uncommitted)
-                    self._uncommitted_typed = uncommitted
+                if committed:
+                    self._type_text(committed)
+                    self._full_text.append(committed)
 
             except Exception as e:
                 print(f"Transcription error: {e}")
@@ -240,36 +231,30 @@ class Dictation:
                 **DEVNULL,
             )
 
-    def _backspace(self, n):
-        if n > 0:
-            subprocess.run(
-                ["xdotool", "key", "--clearmodifiers", "--repeat", str(n),
-                 "--delay", "0", "BackSpace"],
-                **DEVNULL,
-            )
-
     def stop_recording(self):
         if not self.recording:
             return
 
         self.recording = False
+        self.processing = True
         self._stop_event.set()
+        self.notify("Stopped recording", "Processing...", "audio-input-microphone", 30000)
 
         if self.record_process:
             self.record_process.terminate()
             self.record_process.wait()
             self.record_process = None
 
+        threading.Thread(target=self._finalize, daemon=True).start()
+
+    def _finalize(self):
+        """Flush remaining transcription in the background."""
         if self._audio_thread:
             self._audio_thread.join(timeout=2)
         if self._transcribe_thread:
             self._transcribe_thread.join()
 
-        # Erase tentative text, flush remaining
         try:
-            if self._uncommitted_typed:
-                self._backspace(len(self._uncommitted_typed))
-                self._uncommitted_typed = ""
             self._drain_audio_queue()
             _beg, _end, text = self.online.finish()
             if text:
@@ -297,6 +282,7 @@ class Dictation:
 
         self._save_wav()
         self.online.init()
+        self.processing = False
 
     def _save_wav(self):
         try:

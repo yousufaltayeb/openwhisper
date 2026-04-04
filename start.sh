@@ -6,6 +6,8 @@
 # Ensure we are in the project directory
 cd "$(dirname "$0")"
 
+export DISPLAY="${DISPLAY:-:0}"
+
 echo "Starting Whisper..."
 
 # Loop forever to restart if it crashes

@@ -1,16 +1,20 @@
 # Whisper
 
-A voice dictation tool for Linux using [faster-whisper](https://github.com/SYSTRAN/faster-whisper). 
+A voice dictation tool for Linux using [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026), a 2B parameter Conformer-based ASR model.
 
 **Fork Note:** This is an enhanced fork of [soupawhisper](https://github.com/ksred/soupawhisper), expanded to support **Void Linux**, **Runit**, and **PulseAudio/PipeWire**. It also features a **toggle recording** behavior (press to start, press to stop) instead of the original push-to-talk.
 
 ## Features
 
 - **Toggle Recording:** Press the hotkey to start recording, press again to stop and transcribe.
-- **Fast Transcription:** Uses `faster-whisper` for high-performance inference.
+- **Cohere Transcribe:** Uses the CohereLabs/cohere-transcribe-03-2026 model for high-quality transcription.
 - **Auto-Type:** Automatically copies text to clipboard and types it into the active window.
 - **Void Linux Support:** First-class support for Void Linux and Runit service supervision.
 - **Notifications:** Desktop notifications for recording status and errors.
+
+## Supported Languages
+
+English, French, German, Italian, Spanish, Portuguese, Greek, Dutch, Polish, Chinese, Japanese, Korean, Vietnamese, Arabic.
 
 ## Requirements
 
@@ -77,18 +81,21 @@ Edit `~/.config/whisper/config.ini`:
 
 ```ini
 [whisper]
-# Model size: tiny.en, base.en, small.en, medium.en, large-v3
-model = base.en
+# Model ID from HuggingFace (or local path)
+model = CohereLabs/cohere-transcribe-03-2026
 
-# Device: cpu or cuda (requires cuDNN 9+)
-device = cpu
+# Device: cuda or cpu
+device = cuda
 
-# Compute type: int8 for CPU, float16 for GPU
-compute_type = int8
+# Data type: float16 for GPU, float32 for CPU
+dtype = float16
+
+# Language: ISO 639-1 code (en, fr, de, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar)
+language = en
 
 [hotkey]
 # Hotkey to toggle recording (default: Alt+O)
-# Examples: <alt>+o, <ctrl>+space, f12
+# Examples: <alt>+o, <ctrl>+space, <f12>
 key = <alt>+o
 
 [behavior]
@@ -112,9 +119,11 @@ python dictate.py
 - **Stop & Transcribe:** Press the key again to stop. The text will be copied to your clipboard and typed into the active window.
 - **Quit:** Press **Ctrl+C** in the terminal.
 
+**Note:** The first run will download the model from HuggingFace (~4 GB). Subsequent runs use the cached model.
+
 ## Auto-Start with .xinitrc
 
-To start Whisper automatically when you log in, add the following line to your `~/.xinitrc` file (or your window manager's startup script). 
+To start Whisper automatically when you log in, add the following line to your `~/.xinitrc` file (or your window manager's startup script).
 
 Make sure to use the **absolute path** to where you cloned the repository.
 
@@ -128,13 +137,12 @@ The `start.sh` script handles:
 2.  Logging output to `whisper.log`
 3.  Automatically restarting the application if it crashes
 
-## GPU Support (Optional)
+## GPU Support
 
-To use NVIDIA GPU acceleration:
+The model requires ~4 GB VRAM when using `float16`. Any NVIDIA GPU with 4+ GB VRAM should work (e.g. RTX 3050 Mobile).
 
-1.  Install **cuDNN 9** for CUDA 12.
-2.  Update `config.ini`:
-    ```ini
-    device = cuda
-    compute_type = float16
-    ```
+To use CPU instead (slower):
+```ini
+device = cpu
+dtype = float32
+```
