@@ -82,12 +82,12 @@ Edit `~/.config/whisper/config.ini`:
 ```ini
 [whisper]
 # Model size
-model = large-v3-turbo
+model = large-v2
 
 # Device: cuda or cpu
 device = cuda
 
-# Compute type: int8_float16 for mixed GPU, int8 for CPU
+# Compute type: int8_float16/float16 for GPU, int8 for CPU
 compute_type = int8_float16
 
 # Language: ISO 639-1 code (en, fr, de, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar)
@@ -95,19 +95,19 @@ language = en
 
 # Dictation profile (English-only, low hallucination)
 english_only = true
-use_vad = true
+use_vad = false
 condition_on_previous_text = false
 use_init_prompt = false
-no_speech_threshold = 0.45
-log_prob_threshold = -0.8
-compression_ratio_threshold = 2.0
+no_speech_threshold = 1.0
+log_prob_threshold = -2.0
+compression_ratio_threshold = 2.8
 repetition_penalty = 1.05
 no_repeat_ngram_size = 3
 hallucination_silence_threshold = 0.8
-vad_threshold = 0.5
-vad_min_speech_ms = 200
-vad_min_silence_ms = 250
-vad_speech_pad_ms = 180
+vad_threshold = 0.25
+vad_min_speech_ms = 80
+vad_min_silence_ms = 180
+vad_speech_pad_ms = 260
 
 [hotkey]
 # Hotkey to toggle recording (default: Alt+O)
@@ -137,11 +137,11 @@ python dictate.py
 
 ### Hallucination Reduction Notes
 
-This fork now defaults to an English dictation profile tuned to reduce common streaming artifacts such as leading/trailing "thank you", repetition loops, and non-English noise bursts.
+This fork now defaults to an English dictation profile tuned for low-VRAM GPUs and low-input microphones while still reducing common streaming artifacts such as leading/trailing "thank you", repetition loops, and non-English noise bursts.
 
 - `condition_on_previous_text = false` reduces history-induced loops.
 - `use_init_prompt = false` disables prompt carry-over in live streaming.
-- `use_vad = true` plus VAD tuning trims silence before decoding.
+- `use_vad = false` favors recall when your mic input is quiet.
 - Boundary courtesy phrase trimming removes standalone leading/trailing "thank you" style artifacts.
 
 **Note:** The first run will download the model from HuggingFace (~4 GB). Subsequent runs use the cached model.
@@ -166,8 +166,10 @@ The `start.sh` script handles:
 
 The model requires ~4 GB VRAM when using `float16`. Any NVIDIA GPU with 4+ GB VRAM should work (e.g. RTX 3050 Mobile).
 
+On 4 GB GPUs, `large-v2` or `large-v3-turbo` with `compute_type = int8_float16` is more reliable than `large-v3`.
+
 To use CPU instead (slower):
 ```ini
 device = cpu
-dtype = float32
+compute_type = int8
 ```
