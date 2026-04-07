@@ -81,17 +81,33 @@ Edit `~/.config/whisper/config.ini`:
 
 ```ini
 [whisper]
-# Model ID from HuggingFace (or local path)
-model = CohereLabs/cohere-transcribe-03-2026
+# Model size
+model = large-v3-turbo
 
 # Device: cuda or cpu
 device = cuda
 
-# Data type: float16 for GPU, float32 for CPU
-dtype = float16
+# Compute type: int8_float16 for mixed GPU, int8 for CPU
+compute_type = int8_float16
 
 # Language: ISO 639-1 code (en, fr, de, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar)
 language = en
+
+# Dictation profile (English-only, low hallucination)
+english_only = true
+use_vad = true
+condition_on_previous_text = false
+use_init_prompt = false
+no_speech_threshold = 0.45
+log_prob_threshold = -0.8
+compression_ratio_threshold = 2.0
+repetition_penalty = 1.05
+no_repeat_ngram_size = 3
+hallucination_silence_threshold = 0.8
+vad_threshold = 0.5
+vad_min_speech_ms = 200
+vad_min_silence_ms = 250
+vad_speech_pad_ms = 180
 
 [hotkey]
 # Hotkey to toggle recording (default: Alt+O)
@@ -118,6 +134,15 @@ python dictate.py
 - **Toggle Recording:** Press **Alt+O** (or your configured key) to start recording.
 - **Stop & Transcribe:** Press the key again to stop. The text will be copied to your clipboard and typed into the active window.
 - **Quit:** Press **Ctrl+C** in the terminal.
+
+### Hallucination Reduction Notes
+
+This fork now defaults to an English dictation profile tuned to reduce common streaming artifacts such as leading/trailing "thank you", repetition loops, and non-English noise bursts.
+
+- `condition_on_previous_text = false` reduces history-induced loops.
+- `use_init_prompt = false` disables prompt carry-over in live streaming.
+- `use_vad = true` plus VAD tuning trims silence before decoding.
+- Boundary courtesy phrase trimming removes standalone leading/trailing "thank you" style artifacts.
 
 **Note:** The first run will download the model from HuggingFace (~4 GB). Subsequent runs use the cached model.
 
