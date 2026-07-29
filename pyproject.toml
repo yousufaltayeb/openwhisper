@@ -74,3 +74,14 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# The optional Arabic transcription extension guarantees the same CPU-only
+# path as the core Flatpak. Keep PyTorch on its dedicated CPU index so Linux
+# lock resolution cannot silently pull the much larger CUDA dependency set.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

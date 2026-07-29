@@ -3,5 +3,5 @@
 accelerate==1.14.0
 huggingface-hub==1.25.1
 safetensors==0.8.0
-torch==2.13.0
+torch==2.13.0+cpu
 transformers==5.14.1

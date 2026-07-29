@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGING = ROOT / "packaging" / "flatpak"
 WHEELS = PACKAGING / "wheels"
+PYTORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 
 def run(*command: str) -> None:
@@ -25,7 +26,11 @@ def run(*command: str) -> None:
 def main() -> int:
     if shutil.which("uv") is None:
         raise SystemExit("uv is required to export the locked Flatpak dependency set")
-    WHEELS.mkdir(parents=True, exist_ok=True)
+    # A release wheelhouse must never inherit obsolete artifacts from an
+    # earlier resolution (especially accelerator-specific PyTorch wheels).
+    if WHEELS.exists():
+        shutil.rmtree(WHEELS)
+    WHEELS.mkdir(parents=True)
     exports = (
         (None, "requirements-core.lock"),
         ("cohere-local", "requirements-cohere-local.lock"),
@@ -45,7 +50,7 @@ def main() -> int:
         if extra:
             command.extend(("--extra", extra))
         run(*command)
-        run(
+        download_command = [
             sys.executable,
             "-m",
             "pip",
@@ -55,7 +60,12 @@ def main() -> int:
             str(WHEELS),
             "--requirement",
             str(PACKAGING / destination),
-        )
+        ]
+        if extra == "cohere-local":
+            # uv.lock binds torch to this explicit index. pip still needs the
+            # index URL to retrieve the locked +cpu wheel during cache prep.
+            download_command.extend(("--extra-index-url", PYTORCH_CPU_INDEX))
+        run(*download_command)
     print(f"Prepared offline Flatpak wheelhouse at {WHEELS}")
     return 0
 

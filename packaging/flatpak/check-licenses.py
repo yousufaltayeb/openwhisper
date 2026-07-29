@@ -24,6 +24,7 @@ REQUIREMENTS = (
     Path(__file__).with_name("requirements-cohere-local.txt"),
 )
 REQUIRED_NON_PYTHON = ("llama.cpp", "Qwen3-4B GGUF Q4_K_M", "Apache-2.0")
+FORBIDDEN_CPU_RELEASE_PREFIXES = ("cuda_", "nvidia_", "triton_")
 
 
 def requirement_names() -> dict[str, str]:
@@ -80,6 +81,11 @@ def main() -> int:
         if not wheels:
             errors.append("the prepared wheelhouse is empty")
         for wheel in wheels:
+            normalized_wheel = wheel.name.casefold().replace("-", "_")
+            if normalized_wheel.startswith(FORBIDDEN_CPU_RELEASE_PREFIXES):
+                errors.append(f"{wheel.name} is an accelerator wheel in the CPU-only release")
+            if normalized_wheel.startswith("torch_") and "+cpu" not in normalized_wheel:
+                errors.append(f"{wheel.name} is not the required CPU-only PyTorch wheel")
             try:
                 with zipfile.ZipFile(wheel) as archive:
                     metadata_name = next(
