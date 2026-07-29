@@ -16,8 +16,15 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if flatpak --installation="$ow_install" remote-add unsigned "file://$ow_repo" \
-    && flatpak --installation="$ow_install" remote-ls unsigned >/dev/null 2>&1; then
+# ``--installation`` accepts a configured installation name, not a path.
+# FLATPAK_USER_DIR gives the client a real, disposable user installation while
+# keeping the runner's normal user installation untouched.
+ow_flatpak() {
+    FLATPAK_USER_DIR="$ow_install" flatpak --user "$@"
+}
+
+if ow_flatpak remote-add unsigned "file://$ow_repo" \
+    && ow_flatpak remote-ls unsigned >/dev/null 2>&1; then
     printf '%s\n' 'repository was accepted without its public key' >&2
     exit 1
 fi
@@ -26,21 +33,21 @@ fi
 # redirected to the newly built repository. A clean first release has no prior
 # remote and therefore cannot perform this non-bootstrap assertion.
 if [ -n "$ow_prior_repo" ]; then
-    flatpak --installation="$ow_install" remote-add --gpg-import="$ow_public_key" prior "$ow_prior_repo"
-    flatpak --installation="$ow_install" install --no-deps --noninteractive prior "$ow_app//beta"
-    flatpak --installation="$ow_install" remote-modify --url="file://$ow_repo" prior
-    flatpak --installation="$ow_install" update --no-deps --noninteractive "$ow_app//beta"
+    ow_flatpak remote-add --gpg-import="$ow_public_key" prior "$ow_prior_repo"
+    ow_flatpak install --no-deps --noninteractive prior "$ow_app//beta"
+    ow_flatpak remote-modify --url="file://$ow_repo" prior
+    ow_flatpak update --no-deps --noninteractive "$ow_app//beta"
 fi
 
-flatpak --installation="$ow_install" remote-add --gpg-import="$ow_public_key" signed "file://$ow_repo"
-flatpak --installation="$ow_install" install --no-deps --noninteractive signed "$ow_app//$ow_branch"
+ow_flatpak remote-add --gpg-import="$ow_public_key" signed "file://$ow_repo"
+ow_flatpak install --no-deps --noninteractive signed "$ow_app//$ow_branch"
 
 # The signature is over `summary`; corrupt it after copying to prove client
 # verification rejects the altered repository rather than silently trusting it.
 cp -a "$ow_repo/." "$ow_tampered/"
 printf '%s\n' tampered >> "$ow_tampered/summary"
-if flatpak --installation="$ow_install" remote-add --gpg-import="$ow_public_key" tampered "file://$ow_tampered" \
-    && flatpak --installation="$ow_install" remote-ls tampered >/dev/null 2>&1; then
+if ow_flatpak remote-add --gpg-import="$ow_public_key" tampered "file://$ow_tampered" \
+    && ow_flatpak remote-ls tampered >/dev/null 2>&1; then
     printf '%s\n' 'tampered repository signature was accepted' >&2
     exit 1
 fi
