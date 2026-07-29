@@ -42,10 +42,15 @@ fi
 ow_flatpak remote-add --gpg-import="$ow_public_key" signed "file://$ow_repo"
 ow_flatpak install --no-deps --noninteractive signed "$ow_app//$ow_branch"
 
-# The signature is over `summary`; corrupt it after copying to prove client
-# verification rejects the altered repository rather than silently trusting it.
+# New clients prefer the signed summary index and can fall back to the legacy
+# summary. Corrupt both entry points so the assertion proves signature failure
+# regardless of which metadata format the installed Flatpak version selects.
 cp -a "$ow_repo/." "$ow_tampered/"
-printf '%s\n' tampered >> "$ow_tampered/summary"
+for ow_metadata in summary summary.idx; do
+    if [ -f "$ow_tampered/$ow_metadata" ]; then
+        printf '%s\n' tampered >> "$ow_tampered/$ow_metadata"
+    fi
+done
 if ow_flatpak remote-add --gpg-import="$ow_public_key" tampered "file://$ow_tampered" \
     && ow_flatpak remote-ls tampered >/dev/null 2>&1; then
     printf '%s\n' 'tampered repository signature was accepted' >&2
