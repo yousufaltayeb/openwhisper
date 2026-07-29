@@ -1,23 +1,11 @@
-#!/bin/bash
-# Whisper Startup Script
-# Usage: Add the following line to your ~/.xinitrc or WM startup file:
-# /home/yousif/TOP/whisper/start.sh &
+#!/usr/bin/env sh
+# Source-development launcher. Packaged releases use the Flatpak desktop entry.
 
-# Ensure we are in the project directory
-cd "$(dirname "$0")"
+set -eu
 
-export DISPLAY="${DISPLAY:-:0}"
+if [ -f pyproject.toml ] && command -v uv >/dev/null 2>&1; then
+    exec uv run openwhisper "$@"
+fi
 
-echo "Starting Whisper..."
-
-# Loop forever to restart if it crashes
-while true; do
-    # Run using the virtual environment python
-    # Redirect stdout/stderr to a log file for debugging
-    # -u option forces unbuffered output so logs appear immediately
-    .venv/bin/python -u dictate.py >> whisper.log 2>&1
-    
-    # If it crashes, wait 5 seconds before restarting
-    echo "Whisper crashed or exited. Restarting in 5s..." >> whisper.log
-    sleep 5
-done
+printf '%s\n' 'Run this from an OpenWhisper source checkout with uv installed.' >&2
+exit 1

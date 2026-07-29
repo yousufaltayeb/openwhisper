@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openwhisper"
+version = "0.1.0"
+description = "Privacy-first Linux dictation with excellent Arabic support"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Yousuf Altayeb" },
+]
+keywords = ["arabic", "dictation", "linux", "speech-to-text", "whisper"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+  "cryptography>=44,<49",
+  "faster-whisper>=1.1,<2",
+  "huggingface-hub>=0.30,<2",
+  "platformdirs>=4.3,<5",
+  "pynput>=1.7.7,<2",
+  "PySide6>=6.8,<7",
+]
+
+[project.optional-dependencies]
+cloud = [
+  "cohere>=5.15,<6",
+  "deepgram-sdk>=4,<6",
+  "groq>=0.30,<1",
+  "httpx>=0.27,<1",
+  "openai>=1.90,<3",
+]
+cohere-local = [
+  "accelerate>=1.5,<2",
+  "huggingface-hub>=0.30,<2",
+  "safetensors>=0.5,<1",
+  "torch>=2.6,<3",
+  "transformers>=4.50,<6",
+]
+dev = [
+  "build>=1.2,<2",
+  "pytest>=8.3,<10",
+  "pytest-qt>=4.4,<5",
+  "ruff>=0.11,<1",
+]
+[project.scripts]
+openwhisper = "openwhisper.app:main"
+
+[project.urls]
+Homepage = "https://github.com/yousufaltayeb/openwhisper"
+Issues = "https://github.com/yousufaltayeb/openwhisper/issues"
+Repository = "https://github.com/yousufaltayeb/openwhisper.git"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/openwhisper"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

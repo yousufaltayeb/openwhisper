@@ -48,3 +48,18 @@ htmlcov/
 
 # Logs
 *.log
+
+# Local-only product planning and research caches
+/PRD.md
+.firecrawl/
+
+# Local developer secrets and Flatpak build/source caches
+.env
+.env.*
+!.env.example
+/packaging/flatpak/wheels/*
+!/packaging/flatpak/wheels/.gitkeep
+/packaging/flatpak/requirements-*.lock
+/build-dir/
+/unsigned-repo/
+/pages/

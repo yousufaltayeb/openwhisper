@@ -1,0 +1,79 @@
+app-id: io.github.yousufaltayeb.OpenWhisper
+runtime: org.kde.Platform
+runtime-version: "6.11"
+sdk: org.kde.Sdk
+command: openwhisper
+rename-icon: io.github.yousufaltayeb.OpenWhisper
+add-extensions:
+  io.github.yousufaltayeb.OpenWhisper.CohereLocal:
+    directory: extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
+    bundle: true
+    autodelete: false
+    no-autodownload: true
+finish-args:
+  # Model downloads and explicitly configured BYOK providers only. No
+  # telemetry endpoint is present in the application.
+  - --share=network
+  - --share=ipc
+  # Qt Multimedia reaches PipeWire/PulseAudio through this mediated socket.
+  - --socket=pulseaudio
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # AT-SPI is scoped to the accessibility bus; never grant the host/session bus.
+  - --talk-name=org.a11y.Bus
+  # Standard portal service only; this is not a broad session-bus grant. It is
+  # used for the user-mediated Secret and Global Shortcuts portal requests.
+  - --talk-name=org.freedesktop.portal.Desktop
+  # Needed by Qt's StatusNotifier tray integration, not arbitrary name ownership.
+  - --own-name=org.kde.StatusNotifierItem-*
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # One-time, read-only migration of the legacy Whisper preferences only.
+  - --filesystem=xdg-config/whisper:ro
+  - --env=OPENWHISPER_FLATPAK=1
+  - --env=OPENWHISPER_COHERE_LOCAL_EXTENSION=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
+  - --env=PYTHONNOUSERSITE=1
+modules:
+  # CPU-only llama.cpp is part of the core runtime for the managed private
+  # Qwen3 editing pack. Vulkan/NVIDIA remains an opt-in experiment outside the
+  # guaranteed x86_64 CPU path.
+  - name: llama.cpp
+    buildsystem: simple
+    build-commands:
+      - cmake -S . -B build -G Ninja -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+      - cmake --build build --target llama-server
+      - install -Dm755 build/bin/llama-server /app/bin/llama-server
+      - install -Dm644 LICENSE /app/share/licenses/openwhisper/llama.cpp-LICENSE
+    sources:
+      - type: git
+        url: https://github.com/ggml-org/llama.cpp.git
+        commit: 11b068d06605288ce7917534b46d52b47823dc13
+  - name: openwhisper
+    buildsystem: simple
+    build-options:
+      env:
+        PYTHONNOUSERSITE: "1"
+    build-commands:
+      # `prepare-sources.py` creates this locked wheelhouse before a release.
+      # The builder is invoked with --disable-download in CI and release jobs.
+      - python3 -m pip install --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt
+      - python3 -m pip install --no-deps --prefix=/app .
+      - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.desktop /app/share/applications/io.github.yousufaltayeb.OpenWhisper.desktop
+      - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml /app/share/metainfo/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
+      - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.svg /app/share/icons/hicolor/scalable/apps/io.github.yousufaltayeb.OpenWhisper.svg
+      - install -Dm644 LICENSE /app/share/licenses/openwhisper/LICENSE
+      - install -Dm644 NOTICE.md /app/share/licenses/openwhisper/NOTICE.md
+      - install -Dm644 packaging/flatpak/LICENSES.md /app/share/licenses/openwhisper/BUNDLED-LICENSES.md
+    sources:
+      - type: dir
+        path: ../..
+  - name: openwhisper-cohere-local-extension
+    buildsystem: simple
+    build-commands:
+      # Bundled extensions are exported as separate Flatpak refs. The files do
+      # not enter the core app and no-autodownload keeps this pack opt-in.
+      - install -d /app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
+      - python3 -m pip install --no-index --find-links=packaging/flatpak/wheels --prefix=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal -r packaging/flatpak/requirements-cohere-local.txt
+    sources:
+      - type: dir
+        path: ../..

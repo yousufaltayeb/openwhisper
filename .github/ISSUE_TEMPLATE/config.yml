@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/yousufaltayeb/openwhisper#readme
+    about: Check installation, privacy, and configuration guidance before filing an issue.

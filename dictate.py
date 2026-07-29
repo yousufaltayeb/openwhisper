@@ -255,6 +255,12 @@ class Dictation:
             print(f"Failed to load model: {e}")
             if "cudnn" in str(e).lower() or "cuda" in str(e).lower():
                 print("Hint: Try setting device = cpu in config, or install cuDNN.")
+            self.notify(
+                "Whisper model failed",
+                str(e)[:180],
+                "dialog-error",
+                8000,
+            )
 
     def _remove_overlap(self, text):
         if not text or not self._typed_text:
@@ -330,12 +336,18 @@ class Dictation:
             self.start_recording()
 
     def start_recording(self):
-        if self.recording or self.processing or self.model_error:
+        if self.recording or self.processing:
             return
 
         self.model_loaded.wait()
         if self.model_error:
             print("Cannot record: model failed to load")
+            self.notify(
+                "Whisper is not ready",
+                self.model_error[:180],
+                "dialog-error",
+                8000,
+            )
             return
 
         self.recording = True

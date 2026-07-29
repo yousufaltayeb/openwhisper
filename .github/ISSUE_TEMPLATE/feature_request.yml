@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused improvement to OpenWhisper.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not share API keys, private transcripts, or audio recordings.
+        For a new provider, explain its privacy, licensing, and maintenance story.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: Describe the user problem, especially for Arabic or mixed-language dictation where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the smallest useful user-facing behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy and platform impact
+      description: Explain audio/transcript handling, credential needs, licensing, and X11/Wayland implications if applicable.

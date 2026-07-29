@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.yousufaltayeb.OpenWhisper</id>
+  <name>OpenWhisper</name>
+  <developer id="io.github.yousufaltayeb">
+    <name>Yousuf Altayeb</name>
+  </developer>
+  <summary>Private Arabic and English voice dictation for Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      OpenWhisper is a privacy-first Linux dictation app with local Faster
+      Whisper transcription, Arabic-English code-switching, personal modes,
+      vocabulary, snippets, local history, and optional BYOK providers.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.yousufaltayeb.OpenWhisper.desktop</launchable>
+  <provides>
+    <binary>openwhisper</binary>
+  </provides>
+  <url type="homepage">https://github.com/yousufaltayeb/openwhisper</url>
+  <content_rating type="oars-1.1" />
+  <releases>
+    <release version="0.1.0" date="2026-07-29" type="development" />
+  </releases>
+</component>

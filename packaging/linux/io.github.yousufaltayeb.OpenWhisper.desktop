@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=OpenWhisper
+GenericName=Voice Dictation
+Comment=Private voice dictation for Linux
+Exec=openwhisper
+Icon=io.github.yousufaltayeb.OpenWhisper
+Terminal=false
+Categories=Utility;Qt;
+Keywords=dictation;voice;speech;transcription;whisper;Arabic;
+StartupNotify=true
+StartupWMClass=OpenWhisper

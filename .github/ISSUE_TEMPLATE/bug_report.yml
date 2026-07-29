@@ -1,0 +1,67 @@
+name: Bug report
+description: Report a reproducible OpenWhisper problem.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Do not include API keys, full transcripts,
+        audio files, keyring exports, or logs containing private text.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: State the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start OpenWhisper
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - OpenWhisper Flatpak (beta)
+        - OpenWhisper Flatpak (stable)
+        - Development checkout
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Desktop session
+      options:
+        - X11
+        - Wayland
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OpenWhisper version
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution/version, desktop environment, Python version, and selected provider. Redact usernames and paths.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted diagnostics
+      description: Paste only minimal, redacted error output. Never include API keys, auth headers, transcripts, or absolute home paths.

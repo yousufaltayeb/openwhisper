@@ -1,0 +1,11 @@
+[Flatpak Ref]
+Title=OpenWhisper
+Name=app/io.github.yousufaltayeb.OpenWhisper/x86_64/@OPENWHISPER_BRANCH@
+Branch=@OPENWHISPER_BRANCH@
+IsRuntime=false
+Url=https://yousufaltayeb.github.io/openwhisper/repo/
+GPGKey=@OPENWHISPER_GPG_PUBLIC_KEY_BASE64@
+RuntimeRepo=https://dl.flathub.org/repo/flathub.flatpakrepo
+SuggestRemoteName=openwhisper
+Comment=Signed @OPENWHISPER_BRANCH@ OpenWhisper release
+Description=Private Arabic and English voice dictation for Linux.

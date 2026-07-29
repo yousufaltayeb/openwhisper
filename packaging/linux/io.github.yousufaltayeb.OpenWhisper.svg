@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">OpenWhisper</title>
+  <desc id="desc">A stylized microphone and Arabic-inspired speech mark</desc>
+  <defs>
+    <linearGradient id="background" x1="36" y1="24" x2="220" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#162033"/>
+      <stop offset="1" stop-color="#0b111d"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="85" y1="55" x2="180" y2="199" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#80f0ce"/>
+      <stop offset="1" stop-color="#4eb4ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#background)"/>
+  <path d="M128 46a42 42 0 0 0-42 42v46a42 42 0 0 0 84 0V88a42 42 0 0 0-42-42Z" fill="url(#accent)"/>
+  <path d="M68 124v10a60 60 0 0 0 120 0v-10M128 194v27M96 221h64" fill="none" stroke="#d7fff1" stroke-linecap="round" stroke-width="13"/>
+  <path d="M186 70c18 16 27 37 27 58 0 20-8 40-22 55" fill="none" stroke="#ffcf74" stroke-linecap="round" stroke-width="9"/>
+  <circle cx="190" cy="70" r="7" fill="#ffcf74"/>
+</svg>

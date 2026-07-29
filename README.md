@@ -1,175 +1,179 @@
-# Whisper
+# OpenWhisper
 
-A voice dictation tool for Linux using [Cohere Transcribe](https://huggingface.co/CohereLabs/cohere-transcribe-03-2026), a 2B parameter Conformer-based ASR model.
+OpenWhisper is a privacy-first Linux desktop dictation app for Arabic, English,
+and natural Arabic-English code-switching. It runs transcription locally by
+default with Faster Whisper, and lets you bring your own keys for supported
+cloud providers when that is a better fit.
 
-**Fork Note:** This is an enhanced fork of [soupawhisper](https://github.com/ksred/soupawhisper), expanded to support **Void Linux**, **Runit**, and **PulseAudio/PipeWire**. It also features a **toggle recording** behavior (press to start, press to stop) instead of the original push-to-talk.
+OpenWhisper v0.1 targets Linux x86_64, Python 3.12, and PySide6. It is an alpha
+release: use it for personal workflows and report problems with enough detail
+to reproduce them. [النسخة العربية](README.ar.md)
 
-## Features
+![OpenWhisper English and Arabic dictation demo](docs/images/openwhisper-demo.gif)
 
-- **Toggle Recording:** Press the hotkey to start recording, press again to stop and transcribe.
-- **Cohere Transcribe:** Uses the CohereLabs/cohere-transcribe-03-2026 model for high-quality transcription.
-- **Auto-Type:** Automatically copies text to clipboard and types it into the active window.
-- **Void Linux Support:** First-class support for Void Linux and Runit service supervision.
-- **Notifications:** Desktop notifications for recording status and errors.
+<p align="center">
+  <img src="docs/images/openwhisper-dictate.png" width="49%" alt="OpenWhisper dictation screen">
+  <img src="docs/images/openwhisper-settings.png" width="49%" alt="OpenWhisper settings screen">
+</p>
 
-## Supported Languages
+## What it does
 
-English, French, German, Italian, Spanish, Portuguese, Greek, Dutch, Polish, Chinese, Japanese, Korean, Vietnamese, Arabic.
+- Records through Qt Multimedia/PipeWire or PulseAudio, then transcribes and inserts the result.
+- Supports toggle and push-to-talk shortcuts, with portal-first binding and an
+  X11 fallback.
+- Keeps Faster Whisper local by default; model weights download only when a
+  selected local model is first used.
+- Offers optional Cohere, OpenAI, Groq, and Deepgram transcription adapters,
+  plus optional cleanup with supported providers.
+- Preserves the raw transcript by default. Raw, Clean, Formal/MSA, Message,
+  Email, Note, Smart, and Custom modes each own their context consent and rules.
+- Adds recognition vocabulary, voice snippets, deterministic Arabic/English
+  formatting, selected-text transform previews, guarded undo, and Command Mode.
+- Stores raw/final text and non-sensitive performance metadata in searchable
+  local history. Audio retention is off by default; if enabled it defaults to
+  seven days and is capped at thirty.
+- Types directly on X11 where supported. On Wayland, it uses an available
+  insertion method or copies the result to the clipboard and tells you.
+- Uses the XDG Secret portal for encrypted API-key storage when available; no
+  keys are written to the INI configuration, transcript history, or logs.
 
-## Requirements
+OpenWhisper does not provide hosted accounts, synchronization, or telemetry.
 
-- Python 3.10+
-- **Audio Backend:** PulseAudio or PipeWire (requires `parecord`)
-- **System Tools:** `xclip`, `xdotool`, `libnotify`
-- **Linux:** Tested on Void Linux, Ubuntu, Fedora, Arch.
+## Install (Flatpak)
 
-## Installation
-
-### Automatic Installation (Recommended)
-
-The included installer detects your distro and package manager to set everything up, including system dependencies and the Python environment.
-
-```bash
-git clone https://github.com/yourusername/whisper.git
-cd whisper
-chmod +x install.sh
-./install.sh
-```
-
-### Manual Installation
-
-#### 1. Install System Dependencies
-
-**Void Linux:**
-```bash
-sudo xbps-install -S pulseaudio-utils xclip xdotool libnotify
-```
-
-**Ubuntu / Debian:**
-```bash
-sudo apt install pulseaudio-utils xclip xdotool libnotify-bin
-```
-
-**Fedora:**
-```bash
-sudo dnf install pulseaudio-utils xclip xdotool libnotify
-```
-
-**Arch Linux:**
-```bash
-sudo pacman -S pulseaudio-utils xclip xdotool libnotify
-```
-
-#### 2. Install Python Dependencies
+OpenWhisper ships as a signed x86_64 Flatpak only. The `beta` remote receives
+new builds from `main`; `stable` is promoted from an approved version tag after
+the Linux acceptance gates pass.
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+flatpak remote-add --if-not-exists --from openwhisper \
+  https://yousufaltayeb.github.io/openwhisper/openwhisper-beta.flatpakrepo
+flatpak install openwhisper io.github.yousufaltayeb.OpenWhisper//beta
+flatpak run io.github.yousufaltayeb.OpenWhisper
 ```
 
-#### 3. Setup Config
+For a stable release, replace `openwhisper-beta.flatpakrepo` and `//beta` with
+`openwhisper-stable.flatpakrepo` and `//stable`. The remote embeds the release
+public key; Flatpak verifies repository signatures before installing or
+updating. Flathub is intentionally not used under its current
+[generative-AI submission policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy).
+
+Release signing fingerprint:
+`9DFE F9AB 055B 9CC8 A4D1 6DBB B6BF 3FE6 2C7E 797D`.
+
+### Manual development install
+
+For a source checkout, use uv and Python 3.12:
 
 ```bash
-mkdir -p ~/.config/whisper
-cp config.example.ini ~/.config/whisper/config.ini
+uv python install 3.12
+uv sync --extra dev
+uv run openwhisper
 ```
+
+Source development uses the host Qt Multimedia stack. Global shortcuts and
+direct insertion remain desktop-dependent; X11 has a fallback, while Wayland
+uses the Global Shortcuts portal where the compositor provides it.
+
+## First run and storage
+
+| Data | Location | Notes |
+| --- | --- | --- |
+| Preferences | Flatpak config directory | No credentials are stored here. |
+| History | Flatpak data directory | Raw and final text remain local. |
+| Temporary audio | Flatpak cache directory | Removed after processing and stale files are cleaned at startup. |
+| Retained audio | Flatpak data directory | Off by default; opt-in only, 7-day default and 30-day maximum. |
+| API keys | XDG Secret portal encrypted envelope | Environment variables and session memory are fallbacks. |
+
+If `~/.config/whisper/config.ini` exists and OpenWhisper has not yet created a
+configuration, OpenWhisper migrates compatible preferences once through a
+narrow read-only Flatpak mount. It never deletes or edits the old configuration.
 
 ## Configuration
 
-Edit `~/.config/whisper/config.ini`:
+The application settings screen is the recommended way to configure providers,
+models, cleanup, and shortcuts. For source development, start with
+[config.example.ini](config.example.ini).
 
-```ini
-[whisper]
-# Model size
-model = large-v2
+Important defaults:
 
-# Device: cuda or cpu
-device = cuda
+- `provider = faster-whisper` and `model = large-v3-turbo` use the local
+  backend. Choose `cpu` or `cuda` instead of `auto` when you need to force a
+  device.
+- `language = auto` allows Arabic and English. Choose `ar`, `ar-SA`, or `en`
+  if a provider or workflow needs an explicit language.
+- `mode = raw` in `[cleanup]` leaves the transcript unchanged.
+- `mode = toggle` in `[shortcuts]` starts on the first press and stops on the
+  second. Use `push-to-talk` to hold the shortcut while speaking.
+- `retention_days = 0` removes retained text on the next history-pruning pass.
+- `retain = false` in `[audio]` keeps recordings ephemeral. Enabling it uses
+  `retention_days = 7`; values above thirty are rejected.
+- Every context source is disabled per mode until explicitly selected. Cloud
+  context also requires the separate cloud-context consent toggle.
 
-# Compute type: int8_float16/float16 for GPU, int8 for CPU
-compute_type = int8_float16
+Never put an API key in this file, a shell history, or a bug report. Configure
+keys in **Settings → Provider setup**, or set the provider's conventional
+environment variable before starting the app: `COHERE_API_KEY`,
+`OPENAI_API_KEY`, `GROQ_API_KEY`, or `DEEPGRAM_API_KEY`.
 
-# Language: ISO 639-1 code (en, fr, de, it, es, pt, el, nl, pl, zh, ja, ko, vi, ar)
-language = en
+## Providers
 
-# Dictation profile (English-only, low hallucination)
-english_only = true
-use_vad = false
-condition_on_previous_text = false
-use_init_prompt = false
-no_speech_threshold = 1.0
-log_prob_threshold = -2.0
-compression_ratio_threshold = 2.8
-repetition_penalty = 1.05
-no_repeat_ngram_size = 3
-hallucination_silence_threshold = 0.8
-vad_threshold = 0.25
-vad_min_speech_ms = 80
-vad_min_silence_ms = 180
-vad_speech_pad_ms = 260
+| Provider | Role | Install |
+| --- | --- | --- |
+| Faster Whisper | Default local transcription | Included in the Flatpak |
+| Cohere Transcribe Arabic local | Optional signed Flatpak runtime extension | Install from the OpenWhisper remote |
+| Cohere | BYOK cloud transcription and optional cleanup | Built in; add a key |
+| OpenAI | BYOK cloud transcription and optional cleanup | Built in; add a key |
+| Groq | BYOK cloud transcription and optional cleanup | Built in; add a key |
+| Deepgram Nova | BYOK cloud transcription | Built in; add a key |
+| Qwen3 4B GGUF Q4_K_M | Optional local editing/cleanup | CPU `llama-server` included; weights download on demand |
 
-[hotkey]
-# Hotkey to toggle recording (default: Alt+O)
-# Examples: <alt>+o, <ctrl>+space, <f12>
-key = <alt>+o
+CPU is the supported path. Source-development builds of `llama-server` with a
+GPU backend may opt into experimental offload with
+`OPENWHISPER_EXPERIMENTAL_LOCAL_GPU=1`; startup automatically retries on CPU if
+that backend fails.
 
-[behavior]
-# Type text into active input field
-auto_type = true
+Cloud audio is sent to the provider you select; read that provider's data policy
+before use. The local Faster Whisper path does not send recording audio to a
+cloud transcription provider.
 
-# Show desktop notification
-notifications = true
-```
-
-## Usage
-
-Start the application manually:
-
-```bash
-source .venv/bin/activate
-python dictate.py
-```
-
-- **Toggle Recording:** Press **Alt+O** (or your configured key) to start recording.
-- **Stop & Transcribe:** Press the key again to stop. The text will be copied to your clipboard and typed into the active window.
-- **Quit:** Press **Ctrl+C** in the terminal.
-
-### Hallucination Reduction Notes
-
-This fork now defaults to an English dictation profile tuned for low-VRAM GPUs and low-input microphones while still reducing common streaming artifacts such as leading/trailing "thank you", repetition loops, and non-English noise bursts.
-
-- `condition_on_previous_text = false` reduces history-induced loops.
-- `use_init_prompt = false` disables prompt carry-over in live streaming.
-- `use_vad = false` favors recall when your mic input is quiet.
-- Boundary courtesy phrase trimming removes standalone leading/trailing "thank you" style artifacts.
-
-**Note:** The first run will download the model from HuggingFace (~4 GB). Subsequent runs use the cached model.
-
-## Auto-Start with .xinitrc
-
-To start Whisper automatically when you log in, add the following line to your `~/.xinitrc` file (or your window manager's startup script).
-
-Make sure to use the **absolute path** to where you cloned the repository.
+For the optional local Cohere Arabic backend, first accept the gated model
+terms on [Hugging Face](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026),
+install the optional runtime extension from the OpenWhisper remote, then open
+**Settings → Provider setup → Install managed pack**. OpenWhisper checks for a
+supported GPU or at least 8 GiB of system memory and requires an explicit `ar`
+or `en` language selection. A token entered for the download is passed directly
+to Hugging Face and is not stored by OpenWhisper. In source-development runs,
+an existing Hugging Face CLI login can also be used.
 
 ```bash
-# Start Whisper (adjust path as needed)
-/path/to/whisper/start.sh &
+flatpak install openwhisper \
+  io.github.yousufaltayeb.OpenWhisper.CohereLocal//beta
 ```
 
-The `start.sh` script handles:
-1.  Activating the virtual environment
-2.  Logging output to `whisper.log`
-3.  Automatically restarting the application if it crashes
+Use `//stable` when the application itself is installed from the stable branch.
 
-## GPU Support
+## Desktop behavior
 
-The model requires ~4 GB VRAM when using `float16`. Any NVIDIA GPU with 4+ GB VRAM should work (e.g. RTX 3050 Mobile).
+Application ID: `io.github.yousufaltayeb.OpenWhisper`; source CLI:
+`openwhisper`. The Flatpak launcher is installed as
+`io.github.yousufaltayeb.OpenWhisper.desktop`.
 
-On 4 GB GPUs, `large-v2` or `large-v3-turbo` with `compute_type = int8_float16` is more reliable than `large-v3`.
+The Flatpak requests only network, mediated microphone, Wayland/fallback X11,
+DRI, accessibility-bus, StatusNotifier, Secret-portal, and read-only legacy
+config access. It does not request host filesystems or broad system/session bus
+access. On first run, diagnostics identify microphone, shortcut, insertion,
+credential portal, local runtime, and storage readiness without recording or
+sending audio.
 
-To use CPU instead (slower):
-```ini
-device = cpu
-compute_type = int8
-```
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and pull-request
+expectations. The planned scope and release gates live in
+[docs/ROADMAP.md](docs/ROADMAP.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+
+## License and notices
+
+OpenWhisper is MIT-licensed. It began from Soupawhisper; releases must preserve
+the upstream notices and include the notices for bundled runtime dependencies.
+See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).

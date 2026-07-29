@@ -1,2 +1,3 @@
-faster-whisper>=1.0.0
-pynput>=1.7.6
+# Compatibility entry point for tools that still consume requirements files.
+# Project dependencies and optional provider groups live in pyproject.toml.
+-e .

@@ -1,0 +1,9 @@
+[Flatpak Repo]
+Title=OpenWhisper
+Comment=Signed beta and stable releases of private Linux dictation
+Description=OpenWhisper is a privacy-first Arabic and English dictation application for Linux.
+Homepage=https://github.com/yousufaltayeb/openwhisper
+Url=https://yousufaltayeb.github.io/openwhisper/repo/
+Icon=https://yousufaltayeb.github.io/openwhisper/io.github.yousufaltayeb.OpenWhisper.svg
+GPGKey=@OPENWHISPER_GPG_PUBLIC_KEY_BASE64@
+DefaultBranch=@OPENWHISPER_BRANCH@
