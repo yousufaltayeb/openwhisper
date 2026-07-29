@@ -66,8 +66,8 @@ jobs:
           python -m pip install uv
       - name: Install KDE SDK/runtime
         run: |
-          flatpak remote-add --if-not-exists kde https://distribute.kde.org/kdeapps.flatpakrepo
-          flatpak install --user --noninteractive kde org.kde.Sdk//6.11 org.kde.Platform//6.11
+          flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.kde.Sdk//6.11 org.kde.Platform//6.11
       - name: Prepare pinned source cache, then prove the build is offline
         run: |
           test "$(uname -m)" = x86_64
