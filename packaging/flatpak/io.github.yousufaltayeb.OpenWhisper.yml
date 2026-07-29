@@ -56,8 +56,8 @@ modules:
     build-commands:
       # `prepare-sources.py` creates this locked wheelhouse before a release.
       # The builder is invoked with --disable-download in CI and release jobs.
-      - python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt
-      - python3 -m pip install --only-binary=:all: --no-deps --no-index --prefix=/app packaging/flatpak/wheels/openwhisper-*.whl
+      - "python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt"
+      - "python3 -m pip install --only-binary=:all: --no-deps --no-index --prefix=/app packaging/flatpak/wheels/openwhisper-*.whl"
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.desktop /app/share/applications/io.github.yousufaltayeb.OpenWhisper.desktop
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml /app/share/metainfo/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.svg /app/share/icons/hicolor/scalable/apps/io.github.yousufaltayeb.OpenWhisper.svg
@@ -73,7 +73,7 @@ modules:
       # Bundled extensions are exported as separate Flatpak refs. The files do
       # not enter the core app and no-autodownload keeps this pack opt-in.
       - install -d /app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
-      - python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal -r packaging/flatpak/requirements-cohere-local.txt
+      - "python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal -r packaging/flatpak/requirements-cohere-local.txt"
     sources:
       - type: dir
         path: ../..

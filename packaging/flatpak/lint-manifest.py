@@ -28,11 +28,21 @@ def main() -> int:
     content = MANIFEST.read_text(encoding="utf-8")
     missing = sorted(value for value in REQUIRED if value not in content)
     unsafe = sorted(value for value in FORBIDDEN if value in content)
-    if missing or unsafe:
+    malformed_commands = [
+        line.strip()
+        for line in content.splitlines()
+        if line.lstrip().startswith("- python3 ") and ": " in line
+    ]
+    if missing or unsafe or malformed_commands:
         if missing:
             print("manifest missing required entries:", ", ".join(missing))
         if unsafe:
             print("manifest grants prohibited broad permissions:", ", ".join(unsafe))
+        if malformed_commands:
+            print(
+                "manifest has unquoted YAML commands parsed as mappings:",
+                ", ".join(malformed_commands),
+            )
         return 1
     return 0
 
