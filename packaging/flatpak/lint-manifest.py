@@ -17,11 +17,17 @@ REQUIRED = {
     "--device=dri",
     "--talk-name=org.a11y.Bus",
     "--talk-name=org.freedesktop.portal.Desktop",
-    "--own-name=org.kde.StatusNotifierItem-*",
     "--talk-name=org.kde.StatusNotifierWatcher",
     "--filesystem=xdg-config/whisper:ro",
 }
-FORBIDDEN = ("--socket=session-bus", "--socket=system-bus", "--filesystem=host")
+FORBIDDEN = (
+    "--socket=session-bus",
+    "--socket=system-bus",
+    "--filesystem=host",
+    # Flatpak only accepts bus-name wildcards ending in ``.*``. Tray items are
+    # registered through StatusNotifierWatcher and need no own-name grant.
+    "--own-name=org.kde.StatusNotifierItem-",
+)
 
 
 def main() -> int:

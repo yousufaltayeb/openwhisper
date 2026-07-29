@@ -25,8 +25,8 @@ finish-args:
   # Standard portal service only; this is not a broad session-bus grant. It is
   # used for the user-mediated Secret and Global Shortcuts portal requests.
   - --talk-name=org.freedesktop.portal.Desktop
-  # Needed by Qt's StatusNotifier tray integration, not arbitrary name ownership.
-  - --own-name=org.kde.StatusNotifierItem-*
+  # Qt registers tray items through the watcher; no arbitrary D-Bus name
+  # ownership is required.
   - --talk-name=org.kde.StatusNotifierWatcher
   # One-time, read-only migration of the legacy Whisper preferences only.
   - --filesystem=xdg-config/whisper:ro
