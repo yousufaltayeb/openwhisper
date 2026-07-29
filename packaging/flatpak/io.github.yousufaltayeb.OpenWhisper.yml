@@ -40,7 +40,7 @@ modules:
   - name: llama.cpp
     buildsystem: simple
     build-commands:
-      - cmake -S . -B build -G Ninja -DLLAMA_BUILD_SERVER=ON -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
+      - cmake -S . -B build -G Ninja -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF -DGGML_NATIVE=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
       - cmake --build build --target llama-server
       - install -Dm755 build/bin/llama-server /app/bin/llama-server
       - install -Dm644 LICENSE /app/share/licenses/openwhisper/llama.cpp-LICENSE
@@ -56,7 +56,7 @@ modules:
     build-commands:
       # `prepare-sources.py` creates this locked wheelhouse before a release.
       # The builder is invoked with --disable-download in CI and release jobs.
-      - python3 -m pip install --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt
+      - python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt
       - python3 -m pip install --no-deps --prefix=/app .
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.desktop /app/share/applications/io.github.yousufaltayeb.OpenWhisper.desktop
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml /app/share/metainfo/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
@@ -73,7 +73,7 @@ modules:
       # Bundled extensions are exported as separate Flatpak refs. The files do
       # not enter the core app and no-autodownload keeps this pack opt-in.
       - install -d /app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
-      - python3 -m pip install --no-index --find-links=packaging/flatpak/wheels --prefix=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal -r packaging/flatpak/requirements-cohere-local.txt
+      - python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal -r packaging/flatpak/requirements-cohere-local.txt
     sources:
       - type: dir
         path: ../..

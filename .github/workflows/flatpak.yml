@@ -58,7 +58,9 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # KDE 6.11 inherits Python 3.13 from Freedesktop SDK 25.08. Native
+          # release wheels must use the same ABI as the Flatpak builder.
+          python-version: "3.13"
       - name: Install Flatpak build tools
         run: |
           sudo apt-get update
@@ -68,6 +70,12 @@ jobs:
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.kde.Sdk//6.11 org.kde.Platform//6.11
+          sdk_python=$(flatpak run --user --command=python3 org.kde.Sdk//6.11 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          runtime_python=$(flatpak run --user --command=python3 org.kde.Platform//6.11 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          host_python=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          test "$sdk_python" = 3.13
+          test "$runtime_python" = "$sdk_python"
+          test "$host_python" = "$sdk_python"
       - name: Prepare pinned source cache, then prove the build is offline
         run: |
           test "$(uname -m)" = x86_64

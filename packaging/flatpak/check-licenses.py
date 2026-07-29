@@ -25,6 +25,7 @@ REQUIREMENTS = (
 )
 REQUIRED_NON_PYTHON = ("llama.cpp", "Qwen3-4B GGUF Q4_K_M", "Apache-2.0")
 FORBIDDEN_CPU_RELEASE_PREFIXES = ("cuda_", "nvidia_", "triton_")
+FLATPAK_CPYTHON_TAG = "cp313"
 
 
 def requirement_names() -> dict[str, str]:
@@ -80,12 +81,30 @@ def main() -> int:
         wheels = sorted(wheelhouse.glob("*.whl"))
         if not wheels:
             errors.append("the prepared wheelhouse is empty")
+        non_wheels = sorted(
+            artifact.name
+            for artifact in wheelhouse.iterdir()
+            if artifact.is_file() and artifact.suffix != ".whl"
+        )
+        for artifact in non_wheels:
+            errors.append(f"{artifact} is not a prebuilt wheel")
         for wheel in wheels:
             normalized_wheel = wheel.name.casefold().replace("-", "_")
             if normalized_wheel.startswith(FORBIDDEN_CPU_RELEASE_PREFIXES):
                 errors.append(f"{wheel.name} is an accelerator wheel in the CPU-only release")
             if normalized_wheel.startswith("torch_") and "+cpu" not in normalized_wheel:
                 errors.append(f"{wheel.name} is not the required CPU-only PyTorch wheel")
+            tags = wheel.stem.rsplit("-", 3)[-3:]
+            if len(tags) == 3:
+                python_tag, abi_tag, _platform_tag = tags
+                if (
+                    python_tag.startswith("cp")
+                    and abi_tag.startswith("cp")
+                    and python_tag != FLATPAK_CPYTHON_TAG
+                ):
+                    errors.append(
+                        f"{wheel.name} targets {python_tag}, not {FLATPAK_CPYTHON_TAG}"
+                    )
             try:
                 with zipfile.ZipFile(wheel) as archive:
                     metadata_name = next(
