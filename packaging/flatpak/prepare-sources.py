@@ -59,6 +59,14 @@ def build_source_wheels() -> None:
             archive.unlink()
 
 
+def build_application_wheel() -> None:
+    """Build OpenWhisper before the Flatpak sandbox enters offline mode."""
+    run("uv", "build", "--wheel", "--out-dir", str(WHEELS))
+    # uv marks an in-tree output directory as ignored. The release cache gate
+    # intentionally permits wheel artifacts only.
+    (WHEELS / ".gitignore").unlink(missing_ok=True)
+
+
 def main() -> int:
     running_python = sys.version_info[:2]
     if running_python != FLATPAK_PYTHON:
@@ -111,6 +119,7 @@ def main() -> int:
             download_command.extend(("--extra-index-url", PYTORCH_CPU_INDEX))
         run(*download_command)
     build_source_wheels()
+    build_application_wheel()
     print(f"Prepared offline Flatpak wheelhouse at {WHEELS}")
     return 0
 

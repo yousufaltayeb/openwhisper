@@ -57,7 +57,7 @@ modules:
       # `prepare-sources.py` creates this locked wheelhouse before a release.
       # The builder is invoked with --disable-download in CI and release jobs.
       - python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt
-      - python3 -m pip install --no-deps --prefix=/app .
+      - python3 -m pip install --only-binary=:all: --no-deps --no-index --prefix=/app packaging/flatpak/wheels/openwhisper-*.whl
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.desktop /app/share/applications/io.github.yousufaltayeb.OpenWhisper.desktop
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml /app/share/metainfo/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.svg /app/share/icons/hicolor/scalable/apps/io.github.yousufaltayeb.OpenWhisper.svg
