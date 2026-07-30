@@ -1,6 +1,6 @@
 [Flatpak Ref]
 Title=OpenWhisper
-Name=app/io.github.yousufaltayeb.OpenWhisper/x86_64/@OPENWHISPER_BRANCH@
+Name=io.github.yousufaltayeb.OpenWhisper
 Branch=@OPENWHISPER_BRANCH@
 IsRuntime=false
 Url=https://yousufaltayeb.github.io/openwhisper/repo/

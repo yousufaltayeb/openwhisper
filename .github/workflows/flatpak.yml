@@ -119,7 +119,8 @@ jobs:
             "$PWD/pages/repo" \
             packaging/flatpak/keys/openwhisper-public.asc \
             "$branch" \
-            "$prior"
+            "$prior" \
+            "$PWD/pages/openwhisper-$branch.flatpakref"
       - name: Upload GitHub Pages repository
         uses: actions/upload-pages-artifact@v3
         with:

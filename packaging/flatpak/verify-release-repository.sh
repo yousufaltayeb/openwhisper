@@ -4,15 +4,17 @@
 # configured remotes or installed applications.
 set -eu
 
-ow_repo=${1:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url]}
-ow_public_key=${2:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url]}
-ow_branch=${3:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url]}
+ow_repo=${1:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url] <flatpakref>}
+ow_public_key=${2:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url] <flatpakref>}
+ow_branch=${3:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url] <flatpakref>}
 ow_prior_repo=${4:-}
+ow_flatpakref=${5:?usage: verify-release-repository.sh <signed-repo> <public-key> <branch> [prior-repo-url] <flatpakref>}
 ow_app=io.github.yousufaltayeb.OpenWhisper
 ow_install=$(mktemp -d "${TMPDIR:-/tmp}/openwhisper-flatpak-test.XXXXXX")
 ow_tampered=$(mktemp -d "${TMPDIR:-/tmp}/openwhisper-flatpak-tampered.XXXXXX")
+ow_local_ref=$(mktemp "${TMPDIR:-/tmp}/openwhisper-test.XXXXXX.flatpakref")
 cleanup() {
-    rm -rf -- "$ow_install" "$ow_tampered"
+    rm -rf -- "$ow_install" "$ow_tampered" "$ow_local_ref"
 }
 trap cleanup EXIT HUP INT TERM
 
@@ -39,8 +41,11 @@ if [ -n "$ow_prior_repo" ]; then
     ow_flatpak update --no-deps --noninteractive "$ow_app//beta"
 fi
 
-ow_flatpak remote-add --gpg-import="$ow_public_key" signed "file://$ow_repo"
-ow_flatpak install --no-deps --noninteractive signed "$ow_app//$ow_branch"
+# Exercise the generated .flatpakref itself. Only its not-yet-deployed URL is
+# redirected to the local signed repository; identity, branch, and embedded
+# key remain the generated release metadata.
+sed "s|^Url=.*|Url=file://$ow_repo|" "$ow_flatpakref" > "$ow_local_ref"
+ow_flatpak install --no-deps --noninteractive "$ow_local_ref"
 
 # New clients prefer the signed summary index and can fall back to the legacy
 # summary. Corrupt both entry points so the assertion proves signature failure

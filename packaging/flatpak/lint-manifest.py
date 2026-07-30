@@ -6,6 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 MANIFEST = Path(__file__).with_name("io.github.yousufaltayeb.OpenWhisper.yml")
+FLATPAKREF = Path(__file__).with_name(
+    "io.github.yousufaltayeb.OpenWhisper.flatpakref.in"
+)
 REQUIRED = {
     "app-id: io.github.yousufaltayeb.OpenWhisper",
     "runtime: org.kde.Platform",
@@ -28,18 +31,32 @@ FORBIDDEN = (
     # registered through StatusNotifierWatcher and need no own-name grant.
     "--own-name=org.kde.StatusNotifierItem-",
 )
+REQUIRED_FLATPAKREF = {
+    "[Flatpak Ref]",
+    "Name=io.github.yousufaltayeb.OpenWhisper",
+    "Branch=@OPENWHISPER_BRANCH@",
+    "GPGKey=@OPENWHISPER_GPG_PUBLIC_KEY_BASE64@",
+}
+FORBIDDEN_FLATPAKREF = ("Name=app/",)
 
 
 def main() -> int:
     content = MANIFEST.read_text(encoding="utf-8")
+    flatpakref = FLATPAKREF.read_text(encoding="utf-8")
     missing = sorted(value for value in REQUIRED if value not in content)
     unsafe = sorted(value for value in FORBIDDEN if value in content)
+    missing_ref = sorted(
+        value for value in REQUIRED_FLATPAKREF if value not in flatpakref
+    )
+    invalid_ref = sorted(
+        value for value in FORBIDDEN_FLATPAKREF if value in flatpakref
+    )
     malformed_commands = [
         line.strip()
         for line in content.splitlines()
         if line.lstrip().startswith("- python3 ") and ": " in line
     ]
-    if missing or unsafe or malformed_commands:
+    if missing or unsafe or malformed_commands or missing_ref or invalid_ref:
         if missing:
             print("manifest missing required entries:", ", ".join(missing))
         if unsafe:
@@ -49,6 +66,10 @@ def main() -> int:
                 "manifest has unquoted YAML commands parsed as mappings:",
                 ", ".join(malformed_commands),
             )
+        if missing_ref:
+            print("flatpakref missing required entries:", ", ".join(missing_ref))
+        if invalid_ref:
+            print("flatpakref has invalid Name syntax:", ", ".join(invalid_ref))
         return 1
     return 0
 
