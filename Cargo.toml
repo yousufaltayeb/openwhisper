@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/openwhisper-protocol",
+  "crates/openwhisper-core",
+  "crates/openwhisperd",
+  "crates/openwhisper-worker-native",
+  "crates/openwhisper-overlay",
+]
+
+[workspace.package]
+version = "1.0.0-alpha.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/yousufaltayeb/openwhisper"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1.0.99"
+async-trait = "0.1.89"
+bytes = "1.10.1"
+chrono = { version = "0.4.41", features = ["serde"] }
+clap = { version = "4.5.45", features = ["derive"] }
+directories = "6.0.0"
+fs2 = "0.4.3"
+libc = "0.2.175"
+nix = { version = "0.30.1", features = ["user"] }
+rusqlite = { version = "0.32.1", features = ["bundled", "chrono"] }
+schemars = { version = "1.0.4", features = ["chrono04", "uuid1"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+sha2 = "0.10.9"
+tempfile = "3.21.0"
+thiserror = "2.0.16"
+tokio = { version = "1.47.1", features = ["full"] }
+toml = "0.9.5"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+uuid = { version = "1.18.0", features = ["v4", "serde"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

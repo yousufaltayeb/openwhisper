@@ -1,0 +1,31 @@
+[BLOCKED]  OpenWhisper 1.0.0-alpha.1   daemon running   mode raw   language auto   privacy local only         
+                                                                                                              
+                                                                                                              
+1 [Capture]   2 History   3 Modes   4 Words   5 Models   6 Settings   7 Doctor   8 Logs                       
+                                                                                                              
+                                                                                                              
+                                                                                                              
+ ┌─ CAPTURE ────────────────────────────────────────────────────────────────────────────────────────────────┐ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │  Microphone capture is not available in this build                                                       │ 
+ │                                                                                                          │ 
+ │  Run `openwhisper doctor --json` to see the blocked adapter and its fallback. No microphone is opened    │ 
+ │  when you press R.                                                                                       │ 
+ │                                                                                                          │ 
+ │  Logical Unicode remains exact: شغّل cargo test من فضلك                                                   │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ │                                                                                                          │ 
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────┘ 
+                                                                                                              
+[R] record   [C] cancel   [1–8] views   [Q] quit                                                              
+                                                                                                              
+Connected. Audio never crosses the public IPC boundary.                                                       
+                                                                                                              
+

@@ -60,6 +60,12 @@ htmlcov/
 /PRD.md
 .firecrawl/
 
+# Agent-local state is never part of product snapshots or releases
+/.agents/
+/.codex/
+/.impeccable/
+/frontend/.impeccable/
+
 # Local developer secrets and Flatpak build/source caches
 .env
 .env.*
@@ -72,11 +78,7 @@ htmlcov/
 /unsigned-repo/
 /pages/
 
-# Impeccable project tooling is committed; local consent, logs, and live state are not.
-/.impeccable/consent.json
-/.impeccable/logs/
-/.impeccable/live/*
-!/.impeccable/live/config.json
-/frontend/.impeccable/live/*
-!/frontend/.impeccable/live/config.json
-/.agents/.impeccable-hook.log
+# OpenWhisper 1.0 build output
+/target/
+/cli/node_modules/
+/cli/dist/

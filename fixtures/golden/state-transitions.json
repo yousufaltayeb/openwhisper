@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "cases": [
+    { "name": "capture_stop_delivery", "commands": ["start", "stop", "begin_delivery", "complete"], "phases": ["capturing", "transcribing", "delivering", "idle"] },
+    { "name": "capture_cancel", "commands": ["start", "cancel"], "phases": ["capturing", "idle"] },
+    { "name": "reject_second_capture", "commands": ["start", "start"], "error": "a capture is already active" }
+  ]
+}

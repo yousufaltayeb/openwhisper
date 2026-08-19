@@ -1,0 +1,17 @@
+[REC]  OpenWhisper 1.0.0-alpha.1   daemon running   
+mode code   language auto   privacy local only      
+                                                    
+1 [Capt]   2 Hist   3 Modes   4 Words   5 Modl   6  
+Sett   7 Doct   8 Logs                              
+                                                    
+                                                    
+ ┌─ CAPTURE ──────────────────────────────────────┐ 
+ │                                                │ 
+ │                                                │ 
+ │  Recording is active                           │ 
+ │                                                │ 
+ └────────────────────────────────────────────────┘ 
+                                                    
+[R] stop   [C] cancel   [Q] quit                    
+                                                    
+

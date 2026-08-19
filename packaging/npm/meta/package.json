@@ -1,0 +1,19 @@
+{
+  "name": "@yousufaltayeb/openwhisper",
+  "version": "1.0.0-alpha.1",
+  "description": "Open, local-first, cross-platform Arabic-English dictation",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "bin": { "openwhisper": "launcher.cjs" },
+  "files": ["launcher.cjs", "README.md"],
+  "optionalDependencies": {
+    "@yousufaltayeb/openwhisper-darwin-x64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-darwin-arm64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-win32-x64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-win32-arm64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-x64-gnu": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-arm64-gnu": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-x64-musl": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-arm64-musl": "1.0.0-alpha.1"
+  }
+}

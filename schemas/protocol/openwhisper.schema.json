@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openwhisper.dev/schema/protocol/openwhisper-v2.json",
+  "title": "OpenWhisper private IPC protocol",
+  "description": "Canonical schema. Frames are 4-byte big-endian length-prefixed UTF-8 JSON and are limited to 8 MiB.",
+  "oneOf": [
+    { "$ref": "#/$defs/clientMessage" },
+    { "$ref": "#/$defs/serverMessage" }
+  ],
+  "$defs": {
+    "jsonValue": true,
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["available", "backend", "detail"],
+      "properties": {
+        "available": { "type": "boolean" },
+        "backend": { "type": "string" },
+        "detail": { "type": "string" },
+        "fallback": { "type": "string" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["audio", "toggle_hotkey", "push_to_talk", "insertion", "overlay", "notifications", "secrets", "service_manager", "accelerator"],
+      "properties": {
+        "audio": { "$ref": "#/$defs/capability" },
+        "toggle_hotkey": { "$ref": "#/$defs/capability" },
+        "push_to_talk": { "$ref": "#/$defs/capability" },
+        "insertion": { "$ref": "#/$defs/capability" },
+        "overlay": { "$ref": "#/$defs/capability" },
+        "notifications": { "$ref": "#/$defs/capability" },
+        "secrets": { "$ref": "#/$defs/capability" },
+        "service_manager": { "$ref": "#/$defs/capability" },
+        "accelerator": { "$ref": "#/$defs/capability" }
+      }
+    },
+    "errorCode": {
+      "enum": ["usage", "configuration", "daemon_unavailable", "unsupported_capability", "permission_denied", "model_unavailable", "provider_unavailable", "transcription_failed", "cleanup_failed", "insertion_failed", "io", "network", "cancelled", "conflict", "protocol", "internal"]
+    },
+    "rpcError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": { "$ref": "#/$defs/errorCode" },
+        "message": { "type": "string" },
+        "detail": { "type": "string" },
+        "action": { "type": "string" },
+        "retryable": { "type": "boolean" }
+      }
+    },
+    "clientMessage": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "protocol_version", "client", "client_version"],
+          "properties": { "type": { "const": "handshake" }, "protocol_version": { "type": "integer", "minimum": 1, "maximum": 2 }, "client": { "type": "string" }, "client_version": { "type": "string" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "id", "method"],
+          "properties": { "type": { "const": "request" }, "id": { "type": "string" }, "method": { "type": "string" }, "params": { "$ref": "#/$defs/jsonValue" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type"],
+          "properties": { "type": { "const": "subscribe" }, "after_sequence": { "type": "integer", "minimum": 0 } }
+        }
+      ]
+    },
+    "serverMessage": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "protocol_version", "server_version", "capabilities"],
+          "properties": { "type": { "const": "handshake_ack" }, "protocol_version": { "type": "integer" }, "server_version": { "type": "string" }, "capabilities": { "$ref": "#/$defs/capabilities" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "id", "result"],
+          "properties": { "type": { "const": "response" }, "id": { "type": "string" }, "result": { "$ref": "#/$defs/jsonValue" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "error"],
+          "properties": { "type": { "const": "error" }, "id": { "type": "string" }, "error": { "$ref": "#/$defs/rpcError" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "sequence", "event", "data"],
+          "properties": { "type": { "const": "event" }, "sequence": { "type": "integer", "minimum": 0 }, "event": { "type": "string" }, "data": { "$ref": "#/$defs/jsonValue" } }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["type", "sequence", "state"],
+          "properties": { "type": { "const": "snapshot" }, "sequence": { "type": "integer", "minimum": 0 }, "state": { "$ref": "#/$defs/jsonValue" } }
+        }
+      ]
+    }
+  }
+}

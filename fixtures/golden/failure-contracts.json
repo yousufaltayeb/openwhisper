@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "cases": [
+    { "failure": "worker_timeout", "retryable": true, "discard_stale_generation": true, "maximum_recovery_ms": 2000 },
+    { "failure": "target_changed", "delivery": "clipboard", "notify": true, "insert": false },
+    { "failure": "clipboard_changed", "restore_previous": false },
+    { "failure": "cleanup_unavailable", "fallback": "deterministic", "raw_preserved": true }
+  ]
+}

@@ -7,6 +7,10 @@
     "frontend:build": "npm --prefix frontend run build",
     "frontend:test": "npm --prefix frontend test",
     "e2e:build": "cd src-tauri && ../frontend/node_modules/.bin/tauri build --debug --no-bundle --features e2e --config tauri.e2e.conf.json",
-    "e2e": "npm --prefix frontend run e2e"
+    "e2e": "npm --prefix frontend run e2e",
+    "rewrite:protocol": "bun run --cwd cli protocol:generate",
+    "rewrite:check": "cargo test --workspace && bun run --cwd cli check && bun test --cwd cli",
+    "rewrite:build": "cargo build --workspace --release && bun run --cwd cli build:host",
+    "benchmark:fixture": "bun benchmarks/score.ts benchmarks/fixtures/predictions.jsonl"
   }
 }

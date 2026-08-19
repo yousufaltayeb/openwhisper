@@ -129,10 +129,11 @@ recording red is the single physical-looking control that demands attention.
 The system is restrained rather than sterile. Warm neutrals, locally bundled
 Arabic-capable Readex Pro, tabular technical readings, hairline seams, and
 asymmetric working areas make the interface feel authored without decoration.
-The React Capture bench is the main visible shell; the compact PySide overlay is
-its deliberately native, non-focus-stealing companion while dictation runs in
-another application. Gradients, glass effects, nested dashboard cards, and
-ornamental motion remain outside this visual world.
+The OpenTUI operations board is the primary shell; a stateless Rust overlay is
+its native, non-focus-stealing companion while dictation runs in another
+application. The archived React/PySide surface remains visual evidence only.
+Gradients, glass effects, nested dashboard cards, and ornamental motion remain
+outside this visual world.
 
 **Key Characteristics:**
 
@@ -308,32 +309,48 @@ Recoverable engine/action errors appear as sanitized notices. Fatal engine loss
 switches to **Capture stopped safely**, explains the no-silent-restart guarantee,
 and exposes **Restart OpenWhisper**.
 
-### Command Drawer
+### OpenTUI operations board
 
-Ctrl/Cmd+K opens a dismissible React Aria modal. Rows expose Start, Stop and
-Cancel only when valid for the engine state; the configured global shortcut is
-shown only for Start, while the other rows are labeled as actions. Keyboard
-focus is trapped and restored by the dialog primitive.
+The terminal shell refuses a generic dashboard sidebar. A persistent three-row
+status rail names capture, daemon, mode, language, and privacy. A numbered,
+single-level switcher exposes Capture, History, Modes, Words, Models, Settings,
+Doctor, and Logs. One bordered work stage occupies the remaining height; a
+notice row and terse action dock anchor the bottom.
 
-### Readiness Onboarding
+Graphite fills the terminal canvas and rails. The work stage is the dark chalk
+role, with one-pixel construction seams. Recording coral appears only in the
+`[REC]` state and active stage title. Every state remains explicit in text.
+Terminal fonts and BiDi rendering belong to the emulator, so the client stores
+and submits Arabic and mixed-direction text in logical Unicode order without
+visual reshaping.
 
-First-run onboarding is a non-dismissible five-step React Aria dialog: privacy
-boundary acknowledgment, microphone test, shortcut/portal diagnostics, selected
-local-provider readiness, and completion. Continue is gated on an explicit
-privacy check and completed microphone/shortcut checks, including attention
-results; **Open Capture** additionally requires an available provider. Check,
-saving, attention, and save-failure states remain inline and announced. On
-narrow screens the progress rail moves above content and the dialog fills the
-viewport.
+The numbered views are data-backed rather than specimen copy: History reads
+`history.list`; Modes reads `modes.list`; Words joins `vocab.list` and
+`snippets.list`; Models joins `models.list` and `providers.list`; Settings,
+Doctor, and Logs read `config.list`, `system.doctor`, and `system.logs`.
+Keys 1–8 switch views; R toggles capture; C cancels; and Q exits. Context keys
+stay local to their stage: L reloads History or Logs, M advances mode, V reloads
+Words, I inspects the model release gate, P toggles local-only privacy, and D
+refreshes Doctor.
 
-### Native Tray and Overlay Companions
+At fewer than 85 columns, labels compact predictably to Capt, Hist, Modes,
+Words, Modl, Sett, Doct, and Logs. At fewer than 70 columns, contextual hints
+yield before capture controls. The 52×16 critical fixture is the minimum
+interaction reference: wrapped status and view rows may consume height, and
+body copy may clip, but `[REC]`, `[R] stop`, `[C] cancel`, and `[Q] quit` remain
+visible. The renderer owns the alternate screen and is destroyed in `finally`,
+restoring the terminal after normal exit, supported signals, setup/runtime
+errors, or daemon disconnect. Noninteractive commands are the
+accessible/scriptable equivalent of every view.
 
-The Tauri tray offers Show OpenWhisper, Start/Stop dictation, and Quit. Closing
-the main window hides it only when a StatusNotifier tray is available; otherwise
-the window starts and remains reachable. The PySide overlay stays above other
-applications without accepting focus, follows recording/processing state,
-shows level and a clipped partial preview, provides Stop and Cancel, opens near
-the bottom center, and remembers a user-dragged position.
+### Native service and overlay companions
+
+Signed native packages register the per-user Rust daemon under the reverse-DNS
+identity. The stateless Rust overlay subscribes to recording state, timer, and
+waveform only; it never shows transcript text and never accepts focus. AppKit,
+Win32, X11, and wlr-layer-shell are distinct adapters. Unsupported Wayland
+sessions fall back to sound and desktop notification without claiming overlay
+support.
 
 ## Do's and Don'ts
 
@@ -342,29 +359,23 @@ the bottom center, and remembers a user-dragged position.
 - **Do** reserve recording red for the dominant action and live state.
 - **Do** derive labels, availability, shortcuts, microphone, provider, and
   insertion results from engine state rather than sample copy.
-- **Do** use React Aria semantics, full keyboard operation, visible focus,
-  semantic live regions, and 44px compact targets.
-- **Do** use `dir="auto"`, `unicode-bidi: plaintext` for transcript content,
-  bidi isolation for compact values, and logical CSS throughout.
-- **Do** disable all decorative animation, meter transitions, and record
-  transforms when either system reduced-motion or the saved preference applies.
-- **Do** keep transcript state in frontend memory and raw audio inside the
-  Python engine; frontend IPC carries versioned state, metadata, text, and
-  scalar audio-level events only.
-- **Do** preserve the tray and non-focus-stealing Qt overlay as hybrid v0.1
-  companions to the React Capture surface.
+- **Do** support full keyboard operation, small terminals, plain output,
+  `NO_COLOR`, redirected streams, selectable text, and terminal restoration.
+- **Do** preserve logical Unicode and byte-accurate copied/exported/JSON text,
+  even when a terminal renders Arabic shaping or BiDi imperfectly.
+- **Do** keep business state and raw audio in the Rust daemon/worker boundary;
+  the OpenTUI client is presentation only.
+- **Do** expose every interactive action through a stable noninteractive command.
 
 ### Don't:
 
 - **Don't** add gradients, glassmorphism, decorative glow, or translucent cards.
-- **Don't** add secondary screens, nested cards, or a generic dashboard sidebar
-  to this spike.
-- **Don't** use remote fonts, images, scripts, telemetry, frontend network calls,
-  localStorage, IndexedDB, or a service worker.
-- **Don't** animate at rest or bypass either saved or system reduced-motion.
+- **Don't** add nested cards or a generic dashboard sidebar.
+- **Don't** use remote assets, telemetry, background update traffic, or ambient
+  dotenv/bunfig configuration in release builds.
+- **Don't** animate at rest or rely on color as the only state signal.
 - **Don't** force Arabic, Latin, and mixed content into one fixed text direction.
-- **Don't** expose transcript content in desktop notifications or raw audio over
-  the Tauri/Python NDJSON boundary.
-- **Don't** remove the Qt parity path or broaden the cutover until the built
-  Flatpak passes real capture, insertion, overlay, tray-reachability, and portal
-  tests on both GNOME and KDE Wayland; failure on either desktop stops cutover.
+- **Don't** expose transcript content in desktop notifications or microphone
+  audio over public client IPC.
+- **Don't** call a platform complete until its native runner passes capture,
+  insertion, overlay/fallback, service, installer, and Arabic terminal gates.

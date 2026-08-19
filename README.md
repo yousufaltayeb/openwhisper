@@ -1,184 +1,115 @@
 # OpenWhisper
 
-OpenWhisper is a privacy-first Linux desktop dictation app for Arabic, English,
-and natural Arabic-English code-switching. It runs transcription locally by
-default with Faster Whisper, and lets you bring your own keys for supported
-cloud providers when that is a better fit.
+OpenWhisper is an open, local-first, cross-platform dictation system for Arabic,
+English, and developer code-switching. The 1.0 rewrite is TUI-first: a Rust
+per-user daemon owns recording and private state while a Bun-compiled OpenTUI
+client provides interactive and scriptable control.
 
-OpenWhisper v0.1 targets Linux x86_64 with a React/Tauri capture surface and a
-private Python engine. PySide6 remains for recording, Qt Multimedia, portals,
-and the non-focus-stealing overlay. It is an alpha release: use it for personal
-workflows and report reproducible problems. [النسخة العربية](README.ar.md)
+> **Alpha foundation:** the daemon, IPC, state, CLI, TUI, worker supervision,
+> privacy gates, and test contracts run today. Native audio/insertion/overlay,
+> verified ASR packs, cloud transports, signed installers, and the eight-target
+> acceptance matrix remain release blockers. See
+> [1.0 release status](docs/rewrite/RELEASE_STATUS.md). Do not use this branch to
+> make competitive performance claims.
 
-![OpenWhisper English and Arabic dictation demo](docs/images/openwhisper-demo.gif)
-
-![OpenWhisper precision capture surface](docs/images/openwhisper-capture.png)
-
-## What it does
-
-- Records through Qt Multimedia/PipeWire or PulseAudio, then transcribes and inserts the result.
-- Supports toggle and push-to-talk shortcuts, with portal-first binding and an
-  X11 fallback.
-- Keeps Faster Whisper local by default; model weights download only when a
-  selected local model is first used.
-- Offers optional Cohere, OpenAI, Groq, and Deepgram transcription adapters,
-  plus optional cleanup with supported providers.
-- Preserves the raw transcript by default. Raw, Clean, Formal/MSA, Message,
-  Email, Note, Smart, and Custom modes each own their context consent and rules.
-- Adds recognition vocabulary, voice snippets, deterministic Arabic/English
-  formatting, selected-text transform previews, guarded undo, and Command Mode.
-- Stores raw/final text and non-sensitive performance metadata in searchable
-  local history. Audio retention is off by default; if enabled it defaults to
-  seven days and is capped at thirty.
-- Types directly on X11 where supported. On Wayland, it uses an available
-  insertion method or copies the result to the clipboard and tells you.
-- Uses the XDG Secret portal for encrypted API-key storage when available; no
-  keys are written to the INI configuration, transcript history, or logs.
-
-OpenWhisper does not provide hosted accounts, synchronization, or telemetry.
-
-## Install (Flatpak)
-
-OpenWhisper ships as a signed x86_64 Flatpak only. The `beta` remote receives
-new builds from `main`; `stable` is promoted from an approved version tag after
-the Linux acceptance gates pass.
-
-```bash
-flatpak remote-add --if-not-exists --from openwhisper \
-  https://yousufaltayeb.github.io/openwhisper/openwhisper-beta.flatpakrepo
-flatpak install openwhisper io.github.yousufaltayeb.OpenWhisper//beta
-flatpak run io.github.yousufaltayeb.OpenWhisper
+```text
+openwhisper                Bun/OpenTUI client
+      │ private protocol 2/1 IPC (never microphone audio)
+openwhisperd               Rust per-user daemon and sole state writer
+      ├─ bounded supervised native worker
+      └─ stateless native overlay subscriber
 ```
 
-For a stable release, replace `openwhisper-beta.flatpakrepo` and `//beta` with
-`openwhisper-stable.flatpakrepo` and `//stable`. The remote embeds the release
-public key; Flatpak verifies repository signatures before installing or
-updating. Flathub is intentionally not used under its current
-[generative-AI submission policy](https://docs.flathub.org/docs/for-app-authors/requirements#generative-ai-policy).
+## CLI contract
 
-Release signing fingerprint:
-`9DFE F9AB 055B 9CC8 A4D1 6DBB B6BF 3FE6 2C7E 797D`.
+Running `openwhisper` in a terminal opens the TUI. With redirected input/output,
+it prints help without starting the daemon or terminal renderer.
 
-### Manual development install
-
-For a source checkout, use Python 3.12, uv, Node 24/npm 11, and stable Rust:
-
-```bash
-uv python install 3.12
-uv sync --extra dev
-npm --prefix frontend ci
-npm run tauri:dev
+```text
+openwhisper [ui]
+openwhisper record start|stop|toggle|cancel|status [--wait]
+openwhisper transcribe <path|-> [--mode raw|clean|code] [--insert]
+openwhisper history list|search|show|copy|delete|clear|export
+openwhisper modes list|show|select
+openwhisper vocab list|add|remove|import|export
+openwhisper snippets list|add|remove|run|import|export
+openwhisper models list|install|remove|verify|select|import
+openwhisper providers list|configure|test|unset
+openwhisper config list|get|set
+openwhisper service install|start|stop|restart|status|uninstall
+openwhisper setup | doctor | logs | completion | update | version
 ```
 
-The frontend can also run against deterministic, memory-only browser fixtures
-with `npm run frontend:dev`; choose a state using `?fixture=recording` or
-`?fixture=completed`. Browser mode never records, inserts, or contacts a
-provider. `?fixture=onboarding`, `?fixture=unavailable`, and `?fixture=long`
-exercise first-run and hardening states. During the parity milestone,
-`uv run openwhisper` still opens the old
-Qt main window for comparison. Global shortcuts, recording, and insertion in
-the hybrid app remain Python-owned.
+Result data goes to stdout and diagnostics to stderr. `--plain`, `--json`,
+`--jsonl`, `--no-color`, `--no-start`, and `NO_COLOR` are consistent across
+commands. Exit codes are stable: 0 success, 2 usage/configuration, 3 daemon
+unavailable, 4 unsupported/permission, 5 model/provider unavailable,
+6 transcription/cleanup, 7 insertion, 8 network/I/O, and 130 cancellation.
 
-## First run and storage
+## Build and verify
 
-| Data | Location | Notes |
-| --- | --- | --- |
-| Preferences | Flatpak config directory | No credentials are stored here. |
-| History | Flatpak data directory | Raw and final text remain local. |
-| Temporary audio | Flatpak cache directory | Removed after processing and stale files are cleaned at startup. |
-| Retained audio | Flatpak data directory | Off by default; opt-in only, 7-day default and 30-day maximum. |
-| API keys | XDG Secret portal encrypted envelope | Environment variables and session memory are fallbacks. |
-
-If `~/.config/whisper/config.ini` exists and OpenWhisper has not yet created a
-configuration, OpenWhisper migrates compatible preferences once through a
-narrow read-only Flatpak mount. It never deletes or edits the old configuration.
-
-## Configuration
-
-The existing application settings remain authoritative while the Capture-only
-hybrid milestone is under GNOME and KDE validation. For source development,
-start with [config.example.ini](config.example.ini).
-
-Important defaults:
-
-- `provider = faster-whisper` and `model = large-v3-turbo` use the local
-  backend. Choose `cpu` or `cuda` instead of `auto` when you need to force a
-  device.
-- `language = auto` allows Arabic and English. Choose `ar`, `ar-SA`, or `en`
-  if a provider or workflow needs an explicit language.
-- `mode = raw` in `[cleanup]` leaves the transcript unchanged.
-- `mode = toggle` in `[shortcuts]` starts on the first press and stops on the
-  second. Use `push-to-talk` to hold the shortcut while speaking.
-- `retention_days = 0` removes retained text on the next history-pruning pass.
-- `retain = false` in `[audio]` keeps recordings ephemeral. Enabling it uses
-  `retention_days = 7`; values above thirty are rejected.
-- Every context source is disabled per mode until explicitly selected. Cloud
-  context also requires the separate cloud-context consent toggle.
-
-Never put an API key in this file, a shell history, or a bug report. Configure
-keys in **Settings → Provider setup**, or set the provider's conventional
-environment variable before starting the app: `COHERE_API_KEY`,
-`OPENAI_API_KEY`, `GROQ_API_KEY`, or `DEEPGRAM_API_KEY`.
-
-## Providers
-
-| Provider | Role | Install |
-| --- | --- | --- |
-| Faster Whisper | Default local transcription | Included in the Flatpak |
-| Cohere Transcribe Arabic local | Optional signed Flatpak runtime extension | Install from the OpenWhisper remote |
-| Cohere | BYOK cloud transcription and optional cleanup | Built in; add a key |
-| OpenAI | BYOK cloud transcription and optional cleanup | Built in; add a key |
-| Groq | BYOK cloud transcription and optional cleanup | Built in; add a key |
-| Deepgram Nova | BYOK cloud transcription | Built in; add a key |
-| Qwen3 4B GGUF Q4_K_M | Optional local editing/cleanup | CPU `llama-server` included; weights download on demand |
-
-CPU is the supported path. Source-development builds of `llama-server` with a
-GPU backend may opt into experimental offload with
-`OPENWHISPER_EXPERIMENTAL_LOCAL_GPU=1`; startup automatically retries on CPU if
-that backend fails.
-
-Cloud audio is sent to the provider you select; read that provider's data policy
-before use. The local Faster Whisper path does not send recording audio to a
-cloud transcription provider.
-
-For the optional local Cohere Arabic backend, first accept the gated model
-terms on [Hugging Face](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026),
-install the optional runtime extension from the OpenWhisper remote, then open
-**Settings → Provider setup → Install managed pack**. OpenWhisper checks for a
-supported GPU or at least 8 GiB of system memory and requires an explicit `ar`
-or `en` language selection. A token entered for the download is passed directly
-to Hugging Face and is not stored by OpenWhisper. In source-development runs,
-an existing Hugging Face CLI login can also be used.
+Development currently requires stable Rust, Bun 1.3.14, Node/npm for the
+archived frontend tests, Python 3.12/uv for the behavioral reference, and no
+system Python at runtime for the new application.
 
 ```bash
-flatpak install openwhisper \
-  io.github.yousufaltayeb.OpenWhisper.CohereLocal//beta
+bun --cwd cli install --frozen-lockfile
+npm run rewrite:protocol
+npm run rewrite:check
+npm run rewrite:build
 ```
 
-Use `//stable` when the application itself is installed from the stable branch.
+For a development smoke test:
 
-## Desktop behavior
+```bash
+export OPENWHISPERD_PATH="$PWD/target/debug/openwhisperd"
+./cli/dist/openwhisper service start
+./cli/dist/openwhisper doctor --json
+./cli/dist/openwhisper service stop
+```
 
-Application ID: `io.github.yousufaltayeb.OpenWhisper`; source CLI:
-`openwhisper`. The Flatpak launcher is installed as
-`io.github.yousufaltayeb.OpenWhisper.desktop`.
+No speech model is bundled. The `balanced` large-v3-turbo Q5 entry intentionally
+remains unpinned and un-installable until the signed catalog, license, Arabic
+benchmark, and latency gates are approved.
 
-The Flatpak uses the GNOME 50 WebKitGTK runtime and requests only network,
-mediated microphone, Wayland/fallback X11,
-DRI, accessibility-bus, StatusNotifier, Secret-portal, and read-only legacy
-config access. It does not request host filesystems or broad system/session bus
-access. On first run, diagnostics identify microphone, shortcut, insertion,
-credential portal, local runtime, and storage readiness without recording or
-sending audio.
+## Privacy and data
 
-## Development
+The 1.0 daemon creates a new versioned `config.toml` and `state.sqlite3` with
+private per-user permissions. It never opens, migrates, edits, or deletes old
+INI files, history, personalization, credentials, or CTranslate2/model caches.
+`doctor` may report that legacy paths exist by checking metadata only. Uninstall
+preserves data unless a signed installer implements and the user explicitly
+requests `--purge`; legacy data is never a purge target.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks, and pull-request
-expectations. The planned scope and release gates live in
-[docs/ROADMAP.md](docs/ROADMAP.md) and [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+Cloud and update network access require explicit user action. Local-only policy
+fails closed. Cloud providers remain disabled without Keychain, Windows
+Credential Manager, Linux Secret Service, or an explicitly enabled
+passphrase-encrypted fallback. Logs must never contain transcripts, audio,
+clipboard contents, API keys, or request parameters. There is no telemetry,
+analytics, or automatic crash upload.
 
-## License and notices
+Read the [architecture](docs/rewrite/ARCHITECTURE.md),
+[data boundary](docs/rewrite/DATA_BOUNDARY.md), and
+[archived baseline](docs/rewrite/BASELINE.md) before contributing to the rewrite.
 
-OpenWhisper is MIT-licensed. It began from Soupawhisper; releases must preserve
-the upstream notices and include the notices for bundled runtime dependencies.
-See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+## Benchmarks
+
+The frozen harness reports WER, Arabic CER, mixed error rate, technical-term
+recall, and named-entity recall from raw prediction JSONL. The included fixture
+tests metric plumbing only:
+
+```bash
+npm run benchmark:fixture
+```
+
+Publishable results require speaker-disjoint corpora, immutable model/settings/
+hardware manifests, raw predictions, and bootstrap confidence intervals. A
+“better Arabic-English code-switching” claim is forbidden until the documented
+release gate is met reproducibly.
+
+## License and provenance
+
+OpenWhisper is MIT-licensed and retains the upstream Soupawhisper notices. See
+[LICENSE](LICENSE) and [NOTICE.md](NOTICE.md). The pre-rewrite Python/Tauri app
+remains available on `archive/pre-cli-rewrite-2026-08-19` at `d05b851` as a
+behavioral reference.

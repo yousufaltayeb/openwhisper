@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=OpenWhisper daemon
+Exec=openwhisper service start --no-color
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

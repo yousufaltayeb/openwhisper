@@ -21,6 +21,15 @@ this vendored code must retain the applicable upstream MIT notice and license.
 
 ## Runtime dependencies and model assets
 
+The OpenWhisper 1.0 base application is built from Rust and a Bun-compiled
+TypeScript/OpenTUI client. Current direct runtime/build dependencies include
+Tokio, Serde, Rusqlite/SQLite, Schemars, Chrono, UUID, SHA-2, OpenTUI, Bun, and
+their locked transitive dependencies. The base package contains no speech model
+and requires no system Python, Node, Bun, Qt, or Tauri after compilation.
+
+The archived pre-1.0 behavioral reference described below remains in this
+repository and is not part of the new default payload.
+
 OpenWhisper depends on independently licensed packages and model assets,
 including Faster Whisper, CTranslate2, PySide6/Qt, pynput, cryptography,
 huggingface-hub, platformdirs, React, React Aria Components, Lucide, Readex Pro,
@@ -38,7 +47,7 @@ Every release must:
 
 1. Generate an inventory for the exact locked dependency set and include each
    dependency's required license and notice text in the source archive and
-   Flatpak repository.
+   every native/npm payload.
 2. Include the license/notice files required by PySide6/Qt and every bundled
    native library; check the precise Qt distribution terms before publishing.
 3. Preserve the notices above when `whisper_online.py` is shipped.

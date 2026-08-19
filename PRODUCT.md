@@ -4,53 +4,87 @@
 
 ## Platform
 
-web
+Cross-platform terminal client, per-user native daemon, and native background
+identity for macOS, Windows, and Linux.
 
 ## Stack
 
-React, strict TypeScript, Vite, and React Aria Components in a Tauri/WebKitGTK desktop shell. Tauri owns native window, tray, notification, lifecycle, and supervised-process behavior. The existing Python runtime remains the engine for audio, transcription, insertion, credentials, storage, provider integrations, Linux shortcuts, and the temporary PySide recording overlay.
+Rust owns domain state, private IPC, persistence, workers, platform adapters,
+and the overlay. Strict TypeScript compiled by Bun owns the command parser and
+OpenTUI presentation. The base application requires neither Node, Bun, Python,
+Tauri, nor Qt after compilation. Python exists only in an isolated optional
+experimental model pack.
 
 ## Users
 
-OpenWhisper serves Linux desktop users who dictate into other applications, especially people working in Arabic, English, or mixed-direction text. They need a fast, trustworthy capture control that remains available across applications without turning their speech or context into a new data surface.
+Bilingual developers and power users who dictate Arabic, English, technical
+terms, paths, flags, and source code across applications. They need capture to
+survive a closed terminal and need reliable noninteractive JSON commands for
+automation, headless machines, SSH, and containers.
 
-## Product Purpose
+## Product purpose
 
-OpenWhisper provides privacy-first system-wide dictation on Linux. A successful session starts from the window, tray, or a global shortcut; makes recording and processing state unmistakable; transcribes through a selected local or explicitly configured cloud provider; and inserts the result into the intended application with a safe clipboard fallback.
+OpenWhisper provides local-first system-wide dictation. A successful session
+starts from a hotkey or CLI, makes capture state unmistakable, transcribes with
+a verified local model or explicitly configured BYOK provider, applies only the
+selected transformations, retains searchable history under the user's policy,
+and inserts only into the still-safe capture target. Unsafe delivery copies and
+notifies instead.
 
 ## Positioning
 
-OpenWhisper combines first-class Arabic and mixed-direction dictation, Linux-native insertion and portal shortcuts, and a local-process privacy boundary: raw audio remains inside the Python engine and never crosses frontend IPC.
+OpenWhisper is open, local-first, cross-platform, and built to be benchmarked
+for Arabic-English speech. Competitive claims require reproducible public
+results and confidence intervals; no unverified superiority copy is permitted.
 
-## Operating Context
+## Operating context
 
-The application runs primarily in the background on GNOME and KDE Wayland, with X11 support. Users invoke dictation while another application has focus, watch a non-focus-stealing overlay, then return to the main window for provider state and configuration. Flatpak is the v0.1 distribution and update path. The first hybrid milestone contains Capture, tray lifecycle, shortcuts, microphone capture, insertion, and the existing overlay; secondary surfaces wait for GNOME and KDE Wayland validation.
+The daemon remains alive when every terminal closes. The TUI is one replaceable
+client over private local IPC. Desktop capability varies honestly by OS/session;
+Tier 3 headless environments guarantee file/stdin transcription and JSON CLI,
+not microphone hotkeys, overlay, or arbitrary insertion.
 
-## Capabilities and Constraints
+## Capabilities and constraints
 
-- Preserve the OpenWhisper CLI, Flatpak ID `io.github.yousufaltayeb.OpenWhisper`, configuration, databases, credentials, storage locations, privacy defaults, signed remotes, and update compatibility.
-- The visible shell uses no CDN, remote script, service worker, runtime frontend network request, localStorage, or IndexedDB. Fonts, icons, and assets ship locally.
-- Tauri communicates with `openwhisper-engine` only through private versioned NDJSON over child stdin/stdout. Raw audio never enters IPC.
-- Python continues to own recording, transcription, providers, retention, insertion, credentials, Qt Multimedia, QtDBus, Linux shortcuts, and the PySide overlay.
-- English is the only v0.1 interface locale. Arabic and mixed-direction user content are release-blocking and use `dir="auto"`, bidi isolation, logical CSS, Arabic-capable fonts, and locale-aware formatting.
-- Theme preference is `system`, `light`, or `dark`; motion follows both system reduced-motion and the saved OpenWhisper preference.
+- The daemon is the only state writer and owns recording, focus retention,
+  insertion, clipboard recovery, credentials, notifications, and autostart.
+- Microphone audio never enters public client IPC. Workers use separate bounded
+  inherited channels with cancellation, timeout, restart, and generation checks.
+- New versioned `config.toml` and `state.sqlite3` never read, migrate, alter, or
+  delete legacy INI/history/personalization/credential/model data.
+- No model ships in the base application. Downloads, cloud calls, cleanup
+  uploads, and update checks require explicit user action.
+- No telemetry, analytics, automatic crash upload, transcript-bearing logs,
+  runtime CDN, postinstall download, or system-Python mutation.
+- Arabic stays in logical NFC Unicode order. Any terminal BiDi compatibility is
+  view-only; copied, exported, JSON, and database text remains byte-accurate.
+- Stable is blocked on signed binaries, all eight native target runners, real
+  Arabic terminal review, reliability/performance gates, and naming/identity
+  approvals.
 
-## Brand Commitments
+## Brand commitments
 
-Keep the OpenWhisper name and technical, privacy-forward identity. The replacement visual direction is a restrained precision audio instrument: graphite and chalk surfaces, one recording accent, exact spacing, limited elevation and radii, and functional audio visualization. Readex Pro is the Arabic/Latin interface face; IBM Plex Mono is reserved for shortcuts, model identifiers, latency, and technical readings. No gradients, glassmorphism, decorative motion, card nesting, or generic dashboard voice.
+Keep the OpenWhisper name and a restrained precision-audio identity: matte
+graphite rails, chalk work surfaces, one recording signal, exact spacing,
+limited elevation, and functional measurement. Readex Pro remains the
+Arabic/Latin display face where fonts exist; IBM Plex Mono is for machine state.
+In terminals, use native cell text and measured rows rather than pretending
+font control. No gradients, glass, decorative glow, generic dashboard cards,
+or invented benchmarks.
 
-## Evidence on Hand
+## Product principles
 
-The repository contains the working Python runtime and 121-test baseline, the current Qt interface and overlay, production Flatpak metadata, Arabic/English documentation, and existing product screenshots under `docs/images/`. There are no customer claims, benchmarks, testimonials, or telemetry claims to invent.
-
-## Product Principles
-
-- Keep speech private by construction, not by reassurance copy.
-- Make capture state and recovery legible at a glance.
+- Keep speech private by construction, not reassurance.
+- Make unavailable capabilities and recovery actions explicit.
 - Treat Arabic, English, and mixed-direction content as equally real input.
-- Preserve working Linux-native behavior while replacing the visible shell incrementally.
-- Stop the cutover if the hybrid Flatpak cannot pass real GNOME and KDE capture and portal tests.
+- Keep every TUI action available as a noninteractive command.
+- Fail closed on network access, credential protection, focus safety, and model
+  verification.
+- Do not call scaffolding or cross-compilation “platform support.”
 
-## Accessibility & Inclusion
+## Accessibility and inclusion
 
-Use accessible React Aria primitives, full keyboard navigation, visible focus, focus restoration, reduced motion, high-contrast light and dark themes, semantic status announcements, and release-blocking Arabic/mixed-direction content coverage. The document root remains English LTR; user-authored content determines its own direction.
+The TUI supports full keyboard control, small terminals, plain output, `NO_COLOR`,
+redirected streams, terminal restoration, and selectable text. Status is always
+named in text rather than color alone. Native installers and overlay adapters
+must respect OS accessibility and reduced-motion settings.

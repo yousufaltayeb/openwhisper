@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "machine_id": "replace-with-anonymous-stable-id",
+  "os": "linux",
+  "architecture": "x86_64",
+  "cpu": "8-core reference CPU",
+  "memory_gib": 16,
+  "accelerator": "cpu",
+  "openwhisper_version": "1.0.0-alpha.1",
+  "model": "large-v3-turbo-q5-release-candidate",
+  "model_sha256": null,
+  "notes": "Example only; results are invalid while model_sha256 is null."
+}

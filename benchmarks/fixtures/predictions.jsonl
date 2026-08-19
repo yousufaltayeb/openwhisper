@@ -1,0 +1,3 @@
+{"id":"ar-1","subset":"arabic","reference":"افتح المشروع الجديد","prediction":"افتح المشروع الجديد","technical_terms":[],"entities":[]}
+{"id":"mix-1","subset":"mixed","reference":"شغّل cargo test من فضلك","prediction":"شغّل cargo test من فضلك","technical_terms":["cargo test"],"entities":[]}
+{"id":"en-1","subset":"english","reference":"open the OpenWhisper repository","prediction":"open the OpenWhisper repository","technical_terms":["OpenWhisper"],"entities":["OpenWhisper"]}

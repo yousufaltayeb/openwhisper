@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "cases": [
+    { "mode": "raw", "input": "  شغّل cargo test من فضلك  ", "output": "شغّل cargo test من فضلك" },
+    { "mode": "clean", "input": "شغّل  cargo   test من فضلك", "output": "شغّل cargo test من فضلك" },
+    { "mode": "code", "input": "fn main() {   \n  println!(\"مرحبا\");   \n}\n", "output": "fn main() {\n  println!(\"مرحبا\");\n}" }
+  ]
+}

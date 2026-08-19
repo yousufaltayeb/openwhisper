@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenWhisper frozen ASR benchmark result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "normalization", "samples", "wer", "cer", "mixed_error_rate", "technical_term_recall", "named_entity_recall", "by_subset", "input_sha256"],
+  "properties": {
+    "schema": { "const": 1 },
+    "normalization": { "const": "openwhisper-benchmark-v1" },
+    "samples": { "type": "integer", "minimum": 1 },
+    "wer": { "type": "number", "minimum": 0 },
+    "cer": { "type": "number", "minimum": 0 },
+    "mixed_error_rate": { "type": "number", "minimum": 0 },
+    "technical_term_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+    "named_entity_recall": { "type": "number", "minimum": 0, "maximum": 1 },
+    "by_subset": { "type": "object" },
+    "input_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

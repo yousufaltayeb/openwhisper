@@ -1,5 +1,11 @@
 # Contributing to OpenWhisper
 
+> OpenWhisper 1.0 work lives in the Rust workspace and `cli/`. The Python,
+> Tauri, and React trees remain as the archived behavioral reference until the
+> replacement gates pass. Start with `docs/rewrite/ARCHITECTURE.md` and run
+> `npm run rewrite:check`. Do not migrate or delete legacy user data, enable
+> network access implicitly, or mark a cross-compiled target as supported.
+
 Thanks for helping make private Linux dictation dependable, especially for
 Arabic and Arabic-English writing. OpenWhisper is in its v0.1 alpha phase, so
 small reproducible fixes, tests, accessibility improvements, and documentation

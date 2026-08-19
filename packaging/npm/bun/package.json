@@ -1,0 +1,19 @@
+{
+  "name": "@yousufaltayeb/openwhisper-bun",
+  "version": "1.0.0-alpha.1",
+  "description": "Bun launcher for OpenWhisper native packages",
+  "license": "MIT",
+  "engines": { "bun": ">=1.3.14" },
+  "bin": { "openwhisper": "launcher.ts" },
+  "files": ["launcher.ts"],
+  "optionalDependencies": {
+    "@yousufaltayeb/openwhisper-darwin-x64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-darwin-arm64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-win32-x64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-win32-arm64": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-x64-gnu": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-arm64-gnu": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-x64-musl": "1.0.0-alpha.1",
+    "@yousufaltayeb/openwhisper-linux-arm64-musl": "1.0.0-alpha.1"
+  }
+}

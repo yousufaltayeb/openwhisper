@@ -1,0 +1,51 @@
+name: OpenWhisper 1.0 rewrite
+
+on:
+  push:
+    branches: [rewrite/openwhisper-1.0]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --cwd cli --frozen-lockfile
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: bun run --cwd cli check
+      - run: bun test --cwd cli
+      - run: bun benchmarks/score.ts benchmarks/fixtures/predictions.jsonl > benchmark-fixture.json
+      - run: bun run --cwd cli protocol:generate
+      - run: git diff --exit-code -- schemas/protocol crates/openwhisper-protocol/src/lib.rs cli/src/protocol.generated.ts
+
+  target-contract:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - openwhisper-darwin-x64
+          - openwhisper-darwin-arm64
+          - openwhisper-win32-x64
+          - openwhisper-win32-arm64
+          - openwhisper-linux-x64-gnu
+          - openwhisper-linux-arm64-gnu
+          - openwhisper-linux-x64-musl
+          - openwhisper-linux-arm64-musl
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify declared payload contract
+        run: jq -e --arg package "@yousufaltayeb/${{ matrix.package }}" '.[] | select(.package == $package)' packaging/npm/platform-matrix.json
+      - name: Explain support boundary
+        run: echo "This job validates the package contract only; target support requires a native runner and signed installation tests."

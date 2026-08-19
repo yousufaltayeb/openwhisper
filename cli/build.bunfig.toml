@@ -1,0 +1,2 @@
+# Intentionally empty. Release builds pass this path explicitly so a developer's
+# ambient bunfig.toml is never autoloaded into a distributable binary.

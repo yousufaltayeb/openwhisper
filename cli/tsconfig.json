@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "types": ["bun-types"],
+    "skipLibCheck": true
+  },
+  "include": ["src", "test", "../scripts/generate-protocol-types.ts"]
+}

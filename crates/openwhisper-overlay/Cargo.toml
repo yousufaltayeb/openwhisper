@@ -1,0 +1,16 @@
+[package]
+name = "openwhisper-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "openwhisper-overlay"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+openwhisper-protocol = { path = "../openwhisper-protocol" }
+tokio.workspace = true
