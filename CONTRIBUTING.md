@@ -16,19 +16,23 @@ corrections are all valuable.
 
 ## Development setup
 
-OpenWhisper requires Python 3.12. Install uv, clone the repository, and create
-an editable development environment:
+OpenWhisper requires Python 3.12, uv, Node 24/npm 11, and stable Rust. Create
+the Python environment and install the locked frontend graph:
 
 ```bash
 uv python install 3.12
 uv sync --extra dev
+npm --prefix frontend ci
 ```
 
 Start the app with:
 
 ```bash
-uv run openwhisper
+npm run tauri:dev
 ```
+
+`uv run openwhisper` is the temporary Qt parity shell. The shipping milestone
+uses the Tauri host and the private `openwhisper-engine` child process.
 
 For cloud-provider work, install the extras only when needed:
 
@@ -47,6 +51,14 @@ Run the relevant checks before requesting review:
 uv run ruff check src tests
 uv run pytest
 uv build
+npm run frontend:test
+npm run frontend:build
+npm --prefix frontend audit
+npx --yes impeccable@3.5.0 detect --json frontend/src
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo test --locked --all-features --manifest-path src-tauri/Cargo.toml
+npm run e2e:build
+npm run e2e
 sh -n start.sh
 sh -n runit/run
 python3 packaging/flatpak/lint-manifest.py
@@ -57,6 +69,11 @@ behavior should have a unit test at the lowest practical boundary. Provider
 adapters must test success, missing credentials, authentication failures, rate
 limits, timeouts, invalid audio, and malformed responses without reaching a
 live service.
+
+The E2E build runs axe and Capture interactions in the real Linux WebKitGTK
+Tauri window. Its WDIO Rust plugins and global Tauri bridge are enabled only by
+the `e2e` Cargo feature and `tauri.e2e.conf.json`; never enable either in a
+release build.
 
 ## Design boundaries
 

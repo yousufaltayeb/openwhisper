@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import select
 import shutil
 import subprocess
 import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import replace
 from typing import Any
 
+from .contracts import AppSettings, HistoryRow, ProviderOption
 from .core import (
     AppConfig,
     AppPaths,
@@ -25,7 +28,10 @@ from .core import (
     AudioDeviceError,
     AudioRetentionPolicy,
     CapabilityDesktopIntegration,
+    CapturedAudio,
     CleanupMode,
+    ComputeCapability,
+    ComputeProbe,
     ConfigStore,
     DesktopSession,
     DesktopTextInserter,
@@ -51,6 +57,7 @@ from .core import (
     detect_desktop_capabilities,
     smart_format,
 )
+from .core.insertion import ClipboardBackend
 from .core.personalization import (
     CleanupStyle,
     DictationContext,
@@ -63,6 +70,9 @@ from .providers import (
     LlamaServer,
     LlamaServerConfig,
     LocalEditingPackManager,
+    ModelDownloadJob,
+    ModelManager,
+    ModelStatus,
     Qwen3LocalCleanupProvider,
     StablePrefixReconciler,
 )
@@ -86,9 +96,18 @@ from .providers.models import (
     GROQ_TRANSCRIBE_MODEL,
     OPENAI_TRANSCRIBE_MODEL,
 )
-from .ui.models import AppSettings, HistoryRow, ProviderOption
 
 EventCallback = Callable[[str, Mapping[str, Any]], None]
+
+
+def _wait_for_qt_audio_sample(duration_ms: int = 300) -> None:
+    """Keep Qt responsive long enough for an asynchronous microphone probe."""
+
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    loop = QEventLoop()
+    QTimer.singleShot(duration_ms, loop.quit)
+    loop.exec()
 
 
 class LiveInsertionState:
@@ -99,6 +118,8 @@ class LiveInsertionState:
         self._emit = emit
         self._reconciler = StablePrefixReconciler()
         self._last_result: InsertionResult | None = None
+        self._paused = False
+        self._pause_notified = False
         self._lock = threading.RLock()
 
     @property
@@ -111,6 +132,11 @@ class LiveInsertionState:
         with self._lock:
             return self._last_result
 
+    @property
+    def paused(self) -> bool:
+        with self._lock:
+            return self._paused
+
     def insert_chunk(self, text: str) -> None:
         with self._lock:
             had_text = bool(self._reconciler.stable_text)
@@ -119,7 +145,29 @@ class LiveInsertionState:
             if not chunk:
                 return
             insertion_text = f" {chunk}" if had_text else chunk
-        result = self._inserter.insert(insertion_text)
+        try:
+            insert_partial = getattr(self._inserter, "insert_partial", None)
+            result = (
+                insert_partial(insertion_text)
+                if callable(insert_partial)
+                else self._inserter.insert(insertion_text)
+            )
+        except Exception:
+            with self._lock:
+                self._paused = True
+                should_notify = not self._pause_notified
+                self._pause_notified = True
+            if should_notify:
+                self._emit(
+                    "warning",
+                    {
+                        "message": (
+                            "Live insertion paused; final transcription will run "
+                            "after you stop."
+                        )
+                    },
+                )
+            raise
         with self._lock:
             self._last_result = result
             preview = self._reconciler.stable_text
@@ -129,6 +177,8 @@ class LiveInsertionState:
         """Return a conservatively aligned final suffix after live insertion."""
 
         with self._lock:
+            if self._paused:
+                return final_text
             had_text = bool(self._reconciler.stable_text)
             suffix = self._reconciler.reconcile_final(final_text)
         return f" {suffix}" if had_text and suffix else suffix
@@ -137,15 +187,64 @@ class LiveInsertionState:
 class FinalizingTextInserter:
     """Core insertion adapter that accounts for live-inserted raw text."""
 
-    def __init__(self, delegate: DesktopTextInserter, state: LiveInsertionState) -> None:
+    def __init__(
+        self,
+        delegate: Any,
+        state: LiveInsertionState,
+        *,
+        output_mode: str = "insert",
+    ) -> None:
         self._delegate = delegate
         self._state = state
+        self._output_mode = output_mode
 
     def insert(self, text: str) -> InsertionResult:
+        if self._output_mode == "clipboard":
+            try:
+                copied = self._delegate.insert(text, "clipboard")
+            except TypeError:
+                copy = getattr(self._delegate, "copy")
+                copy(text)
+                copied = InsertionResult(
+                    InsertionMethod.CLIPBOARD,
+                    inserted=False,
+                    copied=True,
+                )
+            return InsertionResult(
+                copied.method,
+                warning=copied.warning,
+                inserted=bool(self._state.last_result and self._state.last_result.inserted),
+                copied=bool(copied.copied),
+            )
+
         suffix = self._state.remaining_final_text(text)
+        # A paused live route invalidates the reconciled suffix. Run the batch
+        # transcript in full so no partial chunk can be lost.
         if suffix:
-            return self._delegate.insert(suffix)
-        return self._state.last_result or InsertionResult(InsertionMethod.CLIPBOARD)
+            try:
+                result = self._delegate.insert(suffix, "insert")
+            except TypeError:
+                result = self._delegate.insert(suffix)
+        else:
+            result = self._state.last_result or InsertionResult(InsertionMethod.CLIPBOARD)
+        if self._output_mode == "both":
+            try:
+                copy = getattr(self._delegate, "copy")
+                copy(text)
+            except Exception:
+                return InsertionResult(
+                    result.method,
+                    warning="Transcript inserted, but clipboard copy was unavailable.",
+                    inserted=bool(result.inserted),
+                    copied=False,
+                )
+            return InsertionResult(
+                result.method,
+                warning=result.warning,
+                inserted=bool(result.inserted),
+                copied=True,
+            )
+        return result
 
 
 class CommandClipboard:
@@ -250,60 +349,235 @@ class _EventNotifier:
         self._emit = emit
 
     def notify(self, title: str, message: str) -> None:
-        self._emit("warning", {"title": title, "message": message})
+        self._emit("info", {"title": title, "message": message})
 
 
 class GlobalShortcutService:
-    """Own the pynput listener while keeping gesture semantics in core."""
+    """Own an X11 passive key grab while keeping gesture semantics in core.
+
+    XRecord-based listeners can be restricted to events from the Flatpak's own
+    X11 clients. A passive root-window grab is delivered by the X server no
+    matter which application is focused and does not require a host keyboard
+    device permission.
+    """
+
+    _KEY_PRESS = 2
+    _KEY_RELEASE = 3
+    _KEYBOARD_MODIFIER_MASK = 0xFF
+    _RELEASE_DELAY_SECONDS = 0.03
 
     def __init__(
         self,
         shortcut: str,
         mode: ShortcutMode,
         controller: ShortcutController,
+        *,
+        dispatch: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         self.shortcut = shortcut
         self.mode = mode
         self.controller = controller
-        self._listener: Any = None
+        self._dispatch = dispatch or (lambda callback: callback())
+        self._display: Any = None
+        self._root: Any = None
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._keycode = 0
+        self._modifier_mask = 0
+        self._ignored_modifier_mask = 0
+        self._active = False
+        self._release_deadline: float | None = None
 
     def start(self) -> None:
-        if self._listener is not None:
+        if self._thread is not None:
             return
-        from pynput import keyboard
+        from Xlib import XK, X
+        from Xlib import display as xdisplay
 
-        if self.mode is ShortcutMode.TOGGLE:
-            self._listener = keyboard.GlobalHotKeys({self.shortcut: self.controller.pressed})
-            self._listener.start()
-            return
+        display = xdisplay.Display()
+        root = display.screen().root
+        try:
+            keycode, modifier_mask = self._parse_shortcut(display, X, XK)
+        except Exception:
+            display.close()
+            raise
+        ignored_masks = {
+            X.LockMask,
+            self._modifier_for(display, XK, "Num_Lock"),
+            self._modifier_for(display, XK, "Scroll_Lock"),
+        } - {0}
+        variants = {0}
+        for ignored in ignored_masks:
+            variants.update(value | ignored for value in tuple(variants))
 
-        required = frozenset(keyboard.HotKey.parse(self.shortcut))
-        pressed: set[Any] = set()
-        active = False
+        errors: list[object] = []
 
-        def on_press(key: Any) -> None:
-            nonlocal active
-            canonical = self._listener.canonical(key)
-            pressed.add(canonical)
-            if not active and required.issubset(pressed):
-                active = True
-                self.controller.pressed()
+        def record_error(*details: object) -> None:
+            errors.append(details)
 
-        def on_release(key: Any) -> None:
-            nonlocal active
-            canonical = self._listener.canonical(key)
-            if active and canonical in required:
-                active = False
-                self.controller.released()
-            pressed.discard(canonical)
+        previous_handler = display.set_error_handler(record_error)
+        try:
+            for ignored in variants:
+                root.grab_key(
+                    keycode,
+                    modifier_mask | ignored,
+                    False,
+                    X.GrabModeAsync,
+                    X.GrabModeAsync,
+                )
+            display.sync()
+        finally:
+            display.set_error_handler(previous_handler)
+        if errors:
+            root.ungrab_key(keycode, X.AnyModifier)
+            display.sync()
+            display.close()
+            raise RuntimeError("the configured X11 shortcut is already in use")
 
-        self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-        self._listener.start()
+        self._display = display
+        self._root = root
+        self._keycode = keycode
+        self._modifier_mask = modifier_mask
+        self._ignored_modifier_mask = sum(ignored_masks)
+        self._active = False
+        self._release_deadline = None
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="openwhisper-x11-shortcut",
+            daemon=True,
+        )
+        self._thread.start()
 
     def stop(self) -> None:
-        listener, self._listener = self._listener, None
-        if listener is not None:
-            listener.stop()
+        thread, self._thread = self._thread, None
+        if thread is None:
+            return
+        self._stop_event.set()
+        thread.join(timeout=1)
+        if self._active:
+            with suppress(Exception):
+                self._dispatch(self.controller.released)
+        self.controller.reset()
+        display, root = self._display, self._root
+        self._display = None
+        self._root = None
+        if display is not None and root is not None:
+            with suppress(Exception):
+                from Xlib import X
+
+                root.ungrab_key(self._keycode, X.AnyModifier)
+                display.sync()
+                display.close()
+
+    def _run(self) -> None:
+        display = self._display
+        if display is None:
+            return
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            timeout = 0.05
+            if self._release_deadline is not None:
+                timeout = max(0.0, min(timeout, self._release_deadline - now))
+            try:
+                readable, _, _ = select.select([display.fileno()], [], [], timeout)
+                if readable:
+                    while display.pending_events():
+                        self._handle_event(display.next_event(), time.monotonic())
+                self._flush_release(time.monotonic())
+            except Exception:
+                return
+
+    def _handle_event(self, event: object, now: float) -> None:
+        if getattr(event, "detail", None) != self._keycode:
+            return
+        event_type = getattr(event, "type", None)
+        if event_type == self._KEY_PRESS:
+            state = int(getattr(event, "state", 0)) & self._KEYBOARD_MODIFIER_MASK
+            state &= ~self._ignored_modifier_mask
+            if not self._active and state != self._modifier_mask:
+                return
+            if self._release_deadline is not None:
+                # X11 autorepeat is a release/press pair with no physical key
+                # edge. Keep the logical shortcut held across that pair.
+                self._release_deadline = None
+                return
+            if not self._active:
+                self._active = True
+                with suppress(Exception):
+                    self._dispatch(self.controller.pressed)
+            return
+        if event_type == self._KEY_RELEASE and self._active:
+            self._release_deadline = now + self._RELEASE_DELAY_SECONDS
+
+    def _flush_release(self, now: float) -> None:
+        if self._release_deadline is None or now < self._release_deadline:
+            return
+        self._release_deadline = None
+        self._active = False
+        with suppress(Exception):
+            self._dispatch(self.controller.released)
+
+    def _parse_shortcut(self, display: object, x: object, xk: object) -> tuple[int, int]:
+        tokens = [token.strip().strip("<>").casefold() for token in self.shortcut.split("+")]
+        tokens = [token for token in tokens if token]
+        if not tokens:
+            raise ValueError("shortcut cannot be empty")
+
+        mask = 0
+        key_token: str | None = None
+        for token in tokens:
+            if token in {"ctrl", "ctrl_l", "ctrl_r", "control"}:
+                mask |= x.ControlMask
+            elif token in {"shift", "shift_l", "shift_r"}:
+                mask |= x.ShiftMask
+            elif token in {"alt", "alt_l", "alt_r"}:
+                mask |= self._modifier_for(display, xk, "Alt_L", "Alt_R") or x.Mod1Mask
+            elif token in {"cmd", "cmd_l", "cmd_r", "super", "super_l", "super_r"}:
+                mask |= self._modifier_for(display, xk, "Super_L", "Super_R") or x.Mod4Mask
+            elif key_token is None:
+                key_token = token
+            else:
+                raise ValueError("shortcut must contain exactly one non-modifier key")
+        if key_token is None:
+            raise ValueError("shortcut must contain a non-modifier key")
+
+        key_names = {
+            "backspace": "BackSpace",
+            "delete": "Delete",
+            "down": "Down",
+            "end": "End",
+            "enter": "Return",
+            "esc": "Escape",
+            "escape": "Escape",
+            "home": "Home",
+            "left": "Left",
+            "page_down": "Page_Down",
+            "page_up": "Page_Up",
+            "right": "Right",
+            "space": "space",
+            "tab": "Tab",
+            "up": "Up",
+        }
+        symbol_name = key_names.get(
+            key_token, key_token.upper() if key_token.startswith("f") else key_token
+        )
+        keysym = xk.string_to_keysym(symbol_name)
+        keycode = display.keysym_to_keycode(keysym) if keysym else 0
+        if not keycode:
+            raise ValueError("shortcut key is not available in the current X11 layout")
+        return int(keycode), int(mask)
+
+    @staticmethod
+    def _modifier_for(display: object, xk: object, *symbols: str) -> int:
+        keycodes = {
+            display.keysym_to_keycode(xk.string_to_keysym(symbol)) for symbol in symbols
+        } - {0}
+        mask = 0
+        for index, modifier_keycodes in enumerate(display.get_modifier_mapping()):
+            if keycodes.intersection(modifier_keycodes):
+                mask |= 1 << index
+        return mask
 
 
 class RuntimeController:
@@ -314,17 +588,24 @@ class RuntimeController:
         *,
         paths: AppPaths | None = None,
         environment: Mapping[str, str] | None = None,
+        clipboard: ClipboardBackend | None = None,
+        shortcut_dispatch: Callable[[Callable[[], None]], None] | None = None,
     ) -> None:
         self.environment = os.environ if environment is None else environment
-        self._enable_flatpak_extension()
+        self._clipboard = clipboard
+        self._shortcut_dispatch = shortcut_dispatch or (lambda callback: callback())
         self.paths = paths or AppPaths.from_environment(self.environment)
         self.config_store = ConfigStore(self.paths)
+        had_profile = self.paths.config_file.exists() or any(
+            candidate.exists() for candidate in self.paths.legacy_migration_sources
+        )
         self._config = self.config_store.load(migrate_legacy=True)
-        self._first_run = not self.paths.config_file.exists()
-        if self._first_run:
-            # Persist privacy-first defaults so readiness onboarding is shown
-            # once, even when the user does not change a setting immediately.
+        if not had_profile:
+            self._config = replace(self._config, onboarding_completed=False)
             self.config_store.save(self._config)
+        # Accelerator extensions must be selected before Faster-Whisper first
+        # imports CTranslate2. CUDA and HIP builds are mutually exclusive.
+        self._enable_flatpak_extensions()
         self.credentials = CredentialStore(
             environment=self.environment,
             storage_path=self.paths.credential_envelope,
@@ -352,6 +633,13 @@ class RuntimeController:
         self.history.prune()
         self._callbacks: list[EventCallback] = []
         self._callbacks_lock = threading.RLock()
+        self.models = ModelManager(
+            self.paths.model_cache_dir,
+            selected_model=lambda: self._config.transcription_model,
+            on_changed=self._model_event,
+        )
+        self._compute_capabilities: tuple[ComputeCapability, ...] | None = None
+        self._engine_restart_requested = False
         self._session: DictationSession | None = None
         self._processing_thread: threading.Thread | None = None
         self._shortcut_service: GlobalShortcutService | None = None
@@ -364,13 +652,50 @@ class RuntimeController:
         self._live_thread: threading.Thread | None = None
         self._closed = False
 
-    def _enable_flatpak_extension(self) -> None:
-        root = self.environment.get("OPENWHISPER_COHERE_LOCAL_EXTENSION")
-        if not root:
-            return
-        extension = os.path.abspath(root)
+    def _enable_flatpak_extensions(self) -> None:
+        roots = [self.environment.get("OPENWHISPER_COHERE_LOCAL_EXTENSION")]
+        accelerator = self._config.device
+        if accelerator == "nvidia":
+            roots.append(self.environment.get("OPENWHISPER_NVIDIA_EXTENSION"))
+        elif accelerator == "amd":
+            roots.append(self.environment.get("OPENWHISPER_AMD_EXTENSION"))
+        elif accelerator == "auto":
+            # Conditional Flatpak installations normally expose only the
+            # hardware-matched extension. If both are present, retain the
+            # public NVIDIA -> AMD preference used by the validated probe.
+            for variable in (
+                "OPENWHISPER_NVIDIA_EXTENSION",
+                "OPENWHISPER_AMD_EXTENSION",
+            ):
+                candidate = self.environment.get(variable)
+                if candidate and os.path.isdir(candidate):
+                    roots.append(candidate)
+                    break
+        for root in roots:
+            if root:
+                self._prepend_extension(os.path.abspath(root))
+
+    def _prepend_extension(self, extension: str) -> None:
         if not os.path.isdir(extension):
             return
+        library_directories = [
+            path
+            for path in (
+                os.path.join(extension, "lib"),
+                os.path.join(extension, "lib64"),
+            )
+            if os.path.isdir(path)
+        ]
+        if library_directories:
+            existing = self.environment.get("LD_LIBRARY_PATH", "")
+            value = (
+                os.pathsep.join((*library_directories, existing))
+                if existing
+                else os.pathsep.join(library_directories)
+            )
+            os.environ["LD_LIBRARY_PATH"] = value
+            if isinstance(self.environment, dict):
+                self.environment["LD_LIBRARY_PATH"] = value
         candidates = (
             sorted(
                 os.path.join(extension, "lib", entry, "site-packages")
@@ -398,12 +723,18 @@ class RuntimeController:
                 # UI/extension observers must not break audio deletion or history.
                 continue
 
+    def _model_event(self, event: str, payload: Mapping[str, object]) -> None:
+        """Forward only manager-sanitized model status events."""
+
+        self._emit(event, payload)
+
     def settings(self) -> AppSettings:
         config = self._config
         return AppSettings(
             transcription_provider=config.transcription_provider,
             transcription_model=config.transcription_model,
             device=config.device,
+            output_mode=config.output_mode,
             language=config.language,
             cleanup_mode=config.cleanup_mode,
             cleanup_provider=config.cleanup_provider or "none",
@@ -414,6 +745,8 @@ class RuntimeController:
             retention_days=config.history_retention_days,
             notifications=config.notifications,
             active_mode_id=config.active_mode_id,
+            onboarding_completed=config.onboarding_completed,
+            theme=config.theme,
             reduced_motion=config.reduced_motion,
             retain_audio=config.retain_audio,
             audio_retention_days=config.audio_retention_days,
@@ -421,19 +754,28 @@ class RuntimeController:
         )
 
     def is_first_run(self) -> bool:
-        return self._first_run
+        return not self._config.onboarding_completed
 
     def providers(self) -> Sequence[ProviderOption]:
         local_cohere_available = all(
             importlib.util.find_spec(module) is not None
             for module in ("torch", "transformers", "huggingface_hub")
         )
+        faster_models = list(FASTER_WHISPER_MODELS)
+        if (
+            self._config.transcription_provider == "faster-whisper"
+            and self._config.transcription_model not in faster_models
+        ):
+            # Keep an unknown legacy choice visible and selectable until the
+            # user explicitly replaces it; it is never accepted as a new
+            # download identifier.
+            faster_models.append(self._config.transcription_model)
         return (
             ProviderOption(
                 "faster-whisper",
                 "Faster Whisper",
                 "Local, private transcription and the only live-insertion backend in v0.1.",
-                FASTER_WHISPER_MODELS,
+                tuple(faster_models),
                 supports_streaming=True,
             ),
             ProviderOption(
@@ -487,22 +829,103 @@ class RuntimeController:
             ),
         )
 
+    def models_list(self) -> Sequence[ModelStatus]:
+        return self.models.list(selected_model=self._config.transcription_model)
+
+    def models_download(self, model_id: str) -> ModelDownloadJob:
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError("a model identifier is required")
+        return self.models.download(model_id)
+
+    def models_cancel(self, identifier: str) -> ModelDownloadJob:
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise ValueError("a model or download identifier is required")
+        return self.models.cancel(identifier)
+
+    def models_remove(self, model_id: str) -> ModelStatus:
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError("a model identifier is required")
+        return self.models.remove(model_id, active_model=self._config.transcription_model)
+
+    def compute_capabilities(self, *, refresh: bool = False) -> Sequence[ComputeCapability]:
+        if self._compute_capabilities is None or refresh:
+            probe = ComputeProbe(
+                model=self._model_reference(self._config.transcription_model),
+                model_root=self.paths.model_cache_dir,
+                environment=self.environment,
+            )
+            self._compute_capabilities = probe.probe_all()
+        return self._compute_capabilities
+
+    def probe_compute(self, backend: str | None = None) -> Sequence[ComputeCapability]:
+        if self._session is not None and self._session.state in {
+            SessionState.RECORDING,
+            SessionState.PROCESSING,
+            SessionState.CLEANING,
+            SessionState.INSERTING,
+        }:
+            raise SessionBusyError("finish or cancel the current dictation first")
+        probe = ComputeProbe(
+            model=self._model_reference(self._config.transcription_model),
+            model_root=self.paths.model_cache_dir,
+            environment=self.environment,
+        )
+        if backend and backend != "auto":
+            result = probe.probe(backend).capability()
+            self._compute_capabilities = tuple(
+                item
+                for item in (self._compute_capabilities or ())
+                if item.backend is not result.backend
+            ) + (result,)
+            return (result,)
+        self._compute_capabilities = probe.probe_all()
+        return self._compute_capabilities
+
+    def restart_engine(self) -> Mapping[str, object]:
+        """Mark a vendor change for the host-controlled idle restart."""
+
+        if self._session is not None and self._session.state in {
+            SessionState.RECORDING,
+            SessionState.PROCESSING,
+            SessionState.CLEANING,
+            SessionState.INSERTING,
+        }:
+            raise SessionBusyError("finish or cancel the current dictation first")
+        self._engine_restart_requested = True
+        self._emit(
+            "info",
+            {"title": "Restart required", "message": "The engine will restart while idle."},
+        )
+        return {"accepted": True, "requiresHostRestart": True}
+
     def audio_devices(self) -> Sequence[Any]:
         return QtMultimediaAudioCapture(self.temporary_audio).available_devices()
 
     def test_microphone(self, device_id: str | None = None) -> tuple[bool, str]:
         capture = QtMultimediaAudioCapture(
             self.temporary_audio,
-            default_config=AudioCaptureConfig(device_id=device_id),
+            # A readiness probe needs backend frames, not speech. Disabling
+            # trimming lets a quiet but healthy microphone pass while the
+            # empty-capture guard still rejects a disconnected audio service.
+            default_config=AudioCaptureConfig(device_id=device_id, trim_silence=False),
         )
+        captured = None
         try:
             capture.start()
-            capture.cancel()
+            _wait_for_qt_audio_sample()
+            captured = capture.stop()
         except AudioDeviceError as exc:
             return False, str(exc)
         except Exception:
             return False, "The selected microphone could not be opened."
-        return True, "The selected microphone opened successfully."
+        finally:
+            if capture.is_recording:
+                with suppress(Exception):
+                    capture.cancel()
+            if captured is not None:
+                with suppress(Exception):
+                    self.temporary_audio.delete(captured.path)
+        return True, "The selected microphone opened and returned audio successfully."
 
     def save_settings(self, settings: AppSettings) -> None:
         if self._session is not None and self._session.state in {
@@ -512,12 +935,31 @@ class RuntimeController:
             SessionState.INSERTING,
         }:
             raise SessionBusyError("finish or cancel the current dictation first")
+        previous_device = self._config.device
+        device = "nvidia" if settings.device == "cuda" else settings.device
+        if device not in {"auto", "cpu", "nvidia", "amd"}:
+            raise ValueError("unsupported compute selection")
+        if settings.output_mode not in {"insert", "clipboard", "both"}:
+            raise ValueError("unsupported output mode")
         capabilities = {option.id: option for option in self.providers()}
         provider = capabilities.get(settings.transcription_provider)
         if provider is None or not provider.supports_transcription:
             raise ValueError("unknown transcription provider")
         if not provider.available:
             raise ValueError(provider.unavailable_reason or "provider is unavailable")
+        if (
+            settings.transcription_provider == "faster-whisper"
+            and (
+                settings.transcription_model != self._config.transcription_model
+                or self._config.transcription_provider != "faster-whisper"
+            )
+        ):
+            try:
+                selected_model = self.models.status(settings.transcription_model)
+            except KeyError as exc:
+                raise ValueError("download an allowlisted Faster-Whisper model first") from exc
+            if selected_model.state.value != "installed":
+                raise ValueError("download the Faster-Whisper model before saving it")
         if settings.live_insertion and not provider.supports_streaming:
             raise ValueError("live insertion is not supported by this provider")
         if settings.live_insertion and settings.cleanup_mode != "raw":
@@ -542,8 +984,9 @@ class RuntimeController:
         config = AppConfig(
             transcription_provider=settings.transcription_provider,
             transcription_model=settings.transcription_model or FASTER_WHISPER_DEFAULT_MODEL,
-            device=settings.device,
+            device=device,
             compute_type=self._config.compute_type,
+            output_mode=settings.output_mode,
             language=settings.language,
             cleanup_mode=settings.cleanup_mode,
             cleanup_provider=(
@@ -556,6 +999,8 @@ class RuntimeController:
             history_retention_days=settings.retention_days,
             live_insertion=settings.live_insertion,
             active_mode_id=settings.active_mode_id,
+            onboarding_completed=settings.onboarding_completed,
+            theme=settings.theme,
             reduced_motion=settings.reduced_motion,
             retain_audio=settings.retain_audio,
             audio_retention_days=settings.audio_retention_days,
@@ -571,6 +1016,15 @@ class RuntimeController:
         )
         self._active_mode_id = config.active_mode_id
         self._restart_shortcut()
+        if device != previous_device:
+            # Keep the host in control of process replacement. The engine only
+            # records that an idle restart was requested and returns a safe
+            # acknowledgement through app.restartEngine.
+            self._engine_restart_requested = True
+            self._emit(
+                "info",
+                {"title": "Restart required", "message": "The engine will restart while idle."},
+            )
 
     def save_api_key(self, provider: str, api_key: str) -> None:
         self.credentials.set(provider, api_key)
@@ -603,8 +1057,12 @@ class RuntimeController:
         try:
             adapter = self._provider_router().transcription(
                 provider,
-                model=option.models[0] if option.models else None,
-                device=self._config.device,
+                model=(
+                    self._model_reference(option.models[0])
+                    if provider == "faster-whisper" and option.models
+                    else option.models[0] if option.models else None
+                ),
+                device=self._provider_device(),
                 compute_type=self._config.compute_type,
             )
             result = adapter.test_connection()
@@ -651,6 +1109,8 @@ class RuntimeController:
                 latency_ms=record.latency_ms,
                 transform_name=record.transform_name,
                 has_retained_audio=record.has_retained_audio,
+                inserted=record.inserted,
+                copied=record.copied,
             )
             for record in self.history.search(query)
         )
@@ -838,10 +1298,16 @@ class RuntimeController:
             if record is None or not record.has_retained_audio:
                 raise ValueError("Retained audio is unavailable for this transcript")
             mode = ModeRouter(self.personalization.modes()).route(selected_id=record.mode_id)
+            provider_id = mode.transcription_provider or self._config.transcription_provider
+            model_id = mode.transcription_model or self._config.transcription_model
             provider = self._provider_router().transcription(
-                mode.transcription_provider or self._config.transcription_provider,
-                model=mode.transcription_model or self._config.transcription_model,
-                device=self._config.device,
+                provider_id,
+                model=(
+                    self._model_reference(model_id)
+                    if provider_id == "faster-whisper"
+                    else model_id
+                ),
+                device=self._provider_device(),
                 compute_type=self._config.compute_type,
             )
             result = provider.transcribe(
@@ -855,7 +1321,7 @@ class RuntimeController:
             )
             final_text, cleanup_name, cleanup_model = self._clean_existing_text(result.text, mode)
             final_text = self._personalization_processor(mode)(final_text)
-            insertion = self._desktop_integration().insert(final_text)
+            insertion = self._desktop_integration().insert(final_text, self._config.output_mode)
             saved = self.history.add(
                 HistoryRecord(
                     raw_text=result.text,
@@ -867,10 +1333,20 @@ class RuntimeController:
                     duration_seconds=result.duration_seconds,
                     mode_id=mode.id,
                     insertion_method=insertion.method.value,
+                    inserted=bool(insertion.inserted),
+                    copied=bool(insertion.copied),
                     transform_name="retry",
                 )
             )
-            self._emit("transcript", {"text": final_text, "history_id": saved.id or ""})
+            self._emit(
+                "transcript",
+                {
+                    "text": final_text,
+                    "history_id": saved.id or "",
+                    "inserted": bool(insertion.inserted),
+                    "copied": bool(insertion.copied),
+                },
+            )
         except Exception as exc:
             message = str(exc) if isinstance(exc, (ValueError, ProviderError)) else "Retry failed."
             self._emit("error", {"message": message})
@@ -928,7 +1404,7 @@ class RuntimeController:
 
     def copy_text(self, text: str) -> None:
         session = DesktopSession.from_environment(self.environment)
-        CommandClipboard(session).copy(text)
+        (self._clipboard or CommandClipboard(session)).copy(text)
 
     def copy_last_transcript(self) -> None:
         record = self.history.last_transcript()
@@ -979,6 +1455,22 @@ class RuntimeController:
         else:
             self._start_recording()
 
+    def start_recording(self) -> None:
+        """Start dictation without toggle ambiguity for desktop-shell IPC."""
+
+        if self._closed:
+            raise RuntimeError("OpenWhisper is shutting down")
+        if self._session is not None and self._session.is_recording:
+            raise SessionBusyError("dictation is already recording")
+        self._start_recording()
+
+    def stop_recording(self) -> None:
+        """Stop the active dictation without starting a new recording."""
+
+        if self._session is None or not self._session.is_recording:
+            raise SessionBusyError("no dictation is recording")
+        self._stop_recording()
+
     def _start_recording(self) -> None:
         if self._processing_thread is not None and self._processing_thread.is_alive():
             self._emit("warning", {"message": "The previous dictation is still processing."})
@@ -1010,34 +1502,61 @@ class RuntimeController:
     def _stop_recording(self) -> None:
         if self._session is None:
             return
-        self._emit("state", {"state": SessionState.PROCESSING.value})
+        session = self._session
+        try:
+            # QAudioSource and its QIODevice belong to the QApplication
+            # thread. Stop and drain them here; only provider work moves to a
+            # Python worker.
+            self._stop_live_worker(join=True)
+            captured = session.stop_capture()
+        except AudioDeviceError as exc:
+            self._emit("error", {"message": str(exc)})
+            return
+        except Exception:
+            self._emit(
+                "error",
+                {"message": "Dictation failed. The temporary audio has been deleted."},
+            )
+            return
         self._processing_thread = threading.Thread(
             target=self._process_recording,
+            args=(session, captured),
             name="openwhisper-processing",
             daemon=True,
         )
         self._processing_thread.start()
 
-    def _process_recording(self) -> None:
-        assert self._session is not None
+    def _process_recording(
+        self,
+        session: DictationSession | None = None,
+        captured: CapturedAudio | None = None,
+    ) -> None:
+        session = session or self._session
+        assert session is not None
+        fallback_path = None
+        if captured is not None and self._provider_device() in {"nvidia", "amd"}:
+            # DictationSession deletes its input in a finally block. Preserve a
+            # private duplicate so one failed GPU inference can be retried on
+            # CPU without reopening the microphone or retaining user audio.
+            fallback_path = self.temporary_audio.create_path()
+            shutil.copyfile(captured.path, fallback_path)
         try:
-            self._stop_live_worker(join=True)
-            outcome = self._session.stop_and_process()
-            for warning in outcome.warnings:
-                self._emit("warning", {"message": warning})
-            if outcome.final_text:
-                self._emit(
-                    "transcript",
-                    {
-                        "text": outcome.final_text,
-                        "raw_text": outcome.raw_text,
-                        "provider": (
-                            outcome.transcript.provider if outcome.transcript is not None else ""
-                        ),
-                    },
-                )
-        except ProviderError as exc:
+            outcome = (
+                session.process_captured(captured)
+                if captured is not None
+                else session.stop_and_process()
+            )
+            self._emit_outcome(outcome)
+        except AudioDeviceError as exc:
             self._emit("error", {"message": str(exc)})
+        except ProviderError as exc:
+            if fallback_path is not None and self._retry_on_cpu(fallback_path):
+                self._emit(
+                    "warning",
+                    {"message": "GPU inference failed; the captured audio was retried on CPU."},
+                )
+            else:
+                self._emit("error", {"message": str(exc)})
         except Exception:
             self._emit(
                 "error",
@@ -1048,6 +1567,44 @@ class RuntimeController:
             self._live_capture = None
             self._live_provider = None
             self._live_state = None
+
+    def _emit_outcome(self, outcome: Any) -> None:
+        for warning in outcome.warnings:
+            self._emit("warning", {"message": warning})
+        if not outcome.final_text:
+            return
+        self._emit(
+            "transcript",
+            {
+                "text": outcome.final_text,
+                "raw_text": outcome.raw_text,
+                "insertion_method": (
+                    outcome.insertion.method.value
+                    if outcome.insertion is not None
+                    else InsertionMethod.CLIPBOARD.value
+                ),
+                "inserted": bool(outcome.inserted),
+                "copied": bool(outcome.copied),
+                "provider": (
+                    outcome.transcript.provider if outcome.transcript is not None else ""
+                ),
+                "history_id": (
+                    outcome.history_record.id if outcome.history_record is not None else ""
+                ),
+            },
+        )
+
+    def _retry_on_cpu(self, path: Any) -> bool:
+        try:
+            fallback_session = self._build_session(device_override="cpu")
+            self._session = fallback_session
+            outcome = fallback_session.process_captured(
+                CapturedAudio(path, duration_seconds=None)
+            )
+        except Exception:
+            return False
+        self._emit_outcome(outcome)
+        return bool(outcome.final_text)
 
     def cancel(self) -> None:
         self._stop_live_worker(join=False)
@@ -1063,7 +1620,7 @@ class RuntimeController:
             {"rms": event.rms, "peak": event.peak, "elapsed": event.elapsed_seconds},
         )
 
-    def _build_session(self) -> DictationSession:
+    def _build_session(self, *, device_override: str | None = None) -> DictationSession:
         from .providers import CoreCleanupAdapter, CoreTranscriptionAdapter
 
         router = self._provider_router()
@@ -1084,6 +1641,8 @@ class RuntimeController:
         provider_id = mode.transcription_provider or self._config.transcription_provider
         live_insertion = mode.live_insertion or self._config.live_insertion
         model = mode.transcription_model or self._config.transcription_model
+        if provider_id == "faster-whisper":
+            model = self._model_reference(model)
         language = mode.language if mode.language != "auto" else self._config.language
         if provider_id == "cohere-local":
             pack_status = self.local_pack.status()
@@ -1097,7 +1656,7 @@ class RuntimeController:
         provider = router.transcription(
             provider_id,
             model=model,
-            device=self._config.device,
+            device=device_override or self._provider_device(),
             compute_type=self._config.compute_type,
         )
         hints = tuple(
@@ -1147,7 +1706,11 @@ class RuntimeController:
             self._live_provider = provider
             self._live_state = LiveInsertionState(inserter, self._emit)
             audio_capture = self._live_capture
-            text_inserter = FinalizingTextInserter(inserter, self._live_state)
+            text_inserter = FinalizingTextInserter(
+                inserter,
+                self._live_state,
+                output_mode=self._config.output_mode,
+            )
         else:
             audio_capture = QtMultimediaAudioCapture(
                 self.temporary_audio,
@@ -1164,11 +1727,37 @@ class RuntimeController:
             cleanup_provider=cleanup,
             custom_cleanup_prompt=custom_prompt,
             mode_id=mode.id,
+            output_mode=self._config.output_mode,
             final_text_processor=self._personalization_processor(mode),
             audio_retention=self.audio_retention,
             cancellation_event=cancellation,
             state_listener=self._session_state_changed,
         )
+
+    def _provider_device(self) -> str:
+        """Resolve automatic compute from validated probes when available."""
+
+        config = getattr(self, "_config", None)
+        if config is None:
+            return "auto"
+        if config.device != "auto":
+            return config.device
+        capabilities = self._compute_capabilities
+        if capabilities:
+            selected = ComputeProbe.choose("auto", capabilities)
+            return selected.value
+        return "auto"
+
+    def _model_reference(self, model_id: str) -> str:
+        """Use the managed completed cache without changing persisted IDs."""
+
+        try:
+            status = self.models.status(model_id)
+            if status.state.value == "installed":
+                return str(self.models.model_path(model_id))
+        except (KeyError, ValueError):
+            pass
+        return model_id
 
     def _selected_mode(self) -> ModeDefinition:
         modes = self.personalization.modes()
@@ -1221,7 +1810,7 @@ class RuntimeController:
 
     def _desktop_integration(self) -> CapabilityDesktopIntegration:
         desktop = DesktopSession.from_environment(self.environment)
-        clipboard = CommandClipboard(desktop)
+        clipboard = self._clipboard or CommandClipboard(desktop)
         inserter = DesktopTextInserter(
             session=desktop,
             clipboard=clipboard,
@@ -1298,7 +1887,7 @@ class RuntimeController:
                 for result in results:
                     state.insert_chunk(result.text)
             except Exception:
-                if not self._live_stop.is_set():
+                if not self._live_stop.is_set() and not state.paused:
                     self._emit(
                         "warning",
                         {
@@ -1337,7 +1926,11 @@ class RuntimeController:
         # direct host keyboard listener.
         transport = QtDbusGlobalShortcutsPortalTransport()
         if transport.available:
-            portal = PortalGlobalShortcutBackend(transport, on_error=self._portal_shortcut_error)
+            portal = PortalGlobalShortcutBackend(
+                transport,
+                on_error=self._portal_shortcut_error,
+                on_status=self._portal_shortcut_status,
+            )
             try:
                 portal.register_many(
                     {
@@ -1367,6 +1960,9 @@ class RuntimeController:
             return
         shortcut_mode = ShortcutMode(self._config.shortcut_mode)
         self._start_x11_shortcuts(shortcut_mode, self._shortcut_specs(shortcut_mode))
+
+    def _portal_shortcut_status(self, payload: Mapping[str, object]) -> None:
+        self._emit("shortcut-status", payload)
 
     def _shortcut_specs(
         self, shortcut_mode: ShortcutMode
@@ -1423,7 +2019,12 @@ class RuntimeController:
         services: list[GlobalShortcutService] = []
         try:
             for _identifier, shortcut, gesture in specs:
-                service = GlobalShortcutService(shortcut, shortcut_mode, gesture)
+                service = GlobalShortcutService(
+                    shortcut,
+                    shortcut_mode,
+                    gesture,
+                    dispatch=self._shortcut_dispatch,
+                )
                 service.start()
                 services.append(service)
         except Exception:
@@ -1458,17 +2059,24 @@ class RuntimeController:
             return
         self._closed = True
         for service in self._shortcut_services:
-            service.stop()
+            with suppress(Exception):
+                service.stop()
         self._shortcut_services.clear()
         self._shortcut_service = None
         if self._portal_shortcut is not None:
-            self._portal_shortcut.unregister()
+            with suppress(Exception):
+                self._portal_shortcut.unregister()
             self._portal_shortcut = None
-        self._stop_live_worker(join=False)
+        with suppress(Exception):
+            self._stop_live_worker(join=False)
         if self._session is not None:
-            self._session.cancel()
+            with suppress(Exception):
+                self._session.cancel()
         if self._local_editing_provider is not None:
-            self._local_editing_provider.close()
+            with suppress(Exception):
+                self._local_editing_provider.close()
             self._local_editing_provider = None
-        self.personalization.close()
-        self.history.close()
+        with suppress(Exception):
+            self.personalization.close()
+        with suppress(Exception):
+            self.history.close()

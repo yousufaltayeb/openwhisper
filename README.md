@@ -5,16 +5,14 @@ and natural Arabic-English code-switching. It runs transcription locally by
 default with Faster Whisper, and lets you bring your own keys for supported
 cloud providers when that is a better fit.
 
-OpenWhisper v0.1 targets Linux x86_64, Python 3.12, and PySide6. It is an alpha
-release: use it for personal workflows and report problems with enough detail
-to reproduce them. [النسخة العربية](README.ar.md)
+OpenWhisper v0.1 targets Linux x86_64 with a React/Tauri capture surface and a
+private Python engine. PySide6 remains for recording, Qt Multimedia, portals,
+and the non-focus-stealing overlay. It is an alpha release: use it for personal
+workflows and report reproducible problems. [النسخة العربية](README.ar.md)
 
 ![OpenWhisper English and Arabic dictation demo](docs/images/openwhisper-demo.gif)
 
-<p align="center">
-  <img src="docs/images/openwhisper-dictate.png" width="49%" alt="OpenWhisper dictation screen">
-  <img src="docs/images/openwhisper-settings.png" width="49%" alt="OpenWhisper settings screen">
-</p>
+![OpenWhisper precision capture surface](docs/images/openwhisper-capture.png)
 
 ## What it does
 
@@ -63,17 +61,23 @@ Release signing fingerprint:
 
 ### Manual development install
 
-For a source checkout, use uv and Python 3.12:
+For a source checkout, use Python 3.12, uv, Node 24/npm 11, and stable Rust:
 
 ```bash
 uv python install 3.12
 uv sync --extra dev
-uv run openwhisper
+npm --prefix frontend ci
+npm run tauri:dev
 ```
 
-Source development uses the host Qt Multimedia stack. Global shortcuts and
-direct insertion remain desktop-dependent; X11 has a fallback, while Wayland
-uses the Global Shortcuts portal where the compositor provides it.
+The frontend can also run against deterministic, memory-only browser fixtures
+with `npm run frontend:dev`; choose a state using `?fixture=recording` or
+`?fixture=completed`. Browser mode never records, inserts, or contacts a
+provider. `?fixture=onboarding`, `?fixture=unavailable`, and `?fixture=long`
+exercise first-run and hardening states. During the parity milestone,
+`uv run openwhisper` still opens the old
+Qt main window for comparison. Global shortcuts, recording, and insertion in
+the hybrid app remain Python-owned.
 
 ## First run and storage
 
@@ -91,9 +95,9 @@ narrow read-only Flatpak mount. It never deletes or edits the old configuration.
 
 ## Configuration
 
-The application settings screen is the recommended way to configure providers,
-models, cleanup, and shortcuts. For source development, start with
-[config.example.ini](config.example.ini).
+The existing application settings remain authoritative while the Capture-only
+hybrid milestone is under GNOME and KDE validation. For source development,
+start with [config.example.ini](config.example.ini).
 
 Important defaults:
 
@@ -159,7 +163,8 @@ Application ID: `io.github.yousufaltayeb.OpenWhisper`; source CLI:
 `openwhisper`. The Flatpak launcher is installed as
 `io.github.yousufaltayeb.OpenWhisper.desktop`.
 
-The Flatpak requests only network, mediated microphone, Wayland/fallback X11,
+The Flatpak uses the GNOME 50 WebKitGTK runtime and requests only network,
+mediated microphone, Wayland/fallback X11,
 DRI, accessibility-bus, StatusNotifier, Secret-portal, and read-only legacy
 config access. It does not request host filesystems or broad system/session bus
 access. On first run, diagnostics identify microphone, shortcut, insertion,

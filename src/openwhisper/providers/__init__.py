@@ -46,6 +46,13 @@ from .local_editing import (
     Qwen3LocalCleanupProvider,
 )
 from .local_pack import CohereLocalPackManager, LocalPackStatus
+from .model_manager import (
+    ModelDownloadBusyError,
+    ModelDownloadJob,
+    ModelManager,
+    ModelState,
+    ModelStatus,
+)
 from .registry import ProviderDefinition, ProviderRouter, canonical_provider_id
 from .streaming import ReconciledText, StablePrefixReconciler
 
@@ -76,6 +83,11 @@ __all__ = [
     "LocalEditingPackManager",
     "LocalEditingPackStatus",
     "LocalPackStatus",
+    "ModelDownloadBusyError",
+    "ModelDownloadJob",
+    "ModelManager",
+    "ModelState",
+    "ModelStatus",
     "OpenAICleanupProvider",
     "OpenAITranscriptionProvider",
     "ProviderCapabilities",

@@ -1,0 +1,48 @@
+# Optional NVIDIA runtime extension. This manifest is built and signed as a
+# separate ref; it is intentionally not a module of the CPU application.
+app-id: io.github.yousufaltayeb.OpenWhisper.Nvidia
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+base: io.github.yousufaltayeb.OpenWhisper
+base-version: "0.1.0"
+build-extension: true
+extension-tag: nvidia
+command: openwhisper
+modules:
+  - name: nvidia-cuda-user-space
+    buildsystem: simple
+    build-commands:
+      # The NVIDIA wheels are used only as immutable, checksum-pinned
+      # archives. Flattening the shared objects keeps dlopen names stable for
+      # CTranslate2 while leaving Python package metadata out of the image.
+      - install -d /app/lib /tmp/openwhisper-nvidia
+      - unzip -q nvidia-cublas-cu12.whl -d /tmp/openwhisper-nvidia/cublas
+      - unzip -q nvidia-cudnn-cu12.whl -d /tmp/openwhisper-nvidia/cudnn
+      - unzip -q nvidia-cuda-runtime-cu12.whl -d /tmp/openwhisper-nvidia/runtime
+      - unzip -q nvidia-cuda-nvrtc-cu12.whl -d /tmp/openwhisper-nvidia/nvrtc
+      - >-
+        find /tmp/openwhisper-nvidia -type f -name '*.so*' -exec sh -c
+        'for library; do install -Dm755 "$library" "/app/lib/$(basename "$library")"; done'
+        sh {} +
+      - install -Dm644 NVIDIA-CUDA-NOTICE.md /app/share/licenses/openwhisper-nvidia/NVIDIA-CUDA-NOTICE.md
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/af/eb/ff4b8c503fa1f1796679dce648854d58751982426e4e4b37d6fce49d259c/nvidia_cublas_cu12-12.6.4.1-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: 08ed2686e9875d01b58e3cb379c6896df8e76c75e0d4a7f7dace3d7b6d9ef8eb
+        dest-filename: nvidia-cublas-cu12.whl
+      - type: file
+        url: https://files.pythonhosted.org/packages/2a/78/4535c9c7f859a64781e43c969a3a7e84c54634e319a996d43ef32ce46f83/nvidia_cudnn_cu12-9.5.1.17-py3-none-manylinux_2_28_x86_64.whl
+        sha256: 30ac3869f6db17d170e0e556dd6cc5eee02647abc31ca856634d5a40f82c15b2
+        dest-filename: nvidia-cudnn-cu12.whl
+      - type: file
+        url: https://files.pythonhosted.org/packages/e1/23/e717c5ac26d26cf39a27fbc076240fad2e3b817e5889d671b67f4f9f49c5/nvidia_cuda_runtime_cu12-12.6.77-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl
+        sha256: ba3b56a4f896141e25e19ab287cd71e52a6a0f4b29d0d31609f60e3b4d5219b7
+        dest-filename: nvidia-cuda-runtime-cu12.whl
+      - type: file
+        url: https://files.pythonhosted.org/packages/75/2e/46030320b5a80661e88039f59060d1790298b4718944a65a7f2aeda3d9e9/nvidia_cuda_nvrtc_cu12-12.6.77-py3-none-manylinux2014_x86_64.whl
+        sha256: 35b0cc6ee3a9636d5409133e79273ce1f3fd087abb0532d2d2e8fff1fe9efc53
+        dest-filename: nvidia-cuda-nvrtc-cu12.whl
+      - type: file
+        path: LICENSES.md
+        dest-filename: NVIDIA-CUDA-NOTICE.md

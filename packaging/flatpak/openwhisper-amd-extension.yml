@@ -1,0 +1,94 @@
+# Optional ROCm/HIP runtime extension. CUDA and HIP are mutually exclusive in
+# CTranslate2, so this is a separate ref and is never copied into the CPU or
+# NVIDIA images.
+app-id: io.github.yousufaltayeb.OpenWhisper.Amd
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+base: io.github.yousufaltayeb.OpenWhisper
+base-version: "0.1.0"
+build-extension: true
+extension-tag: amd
+command: openwhisper
+modules:
+  - name: rocm-core
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ROCm/rocm-core.git
+        commit: 98a50c572a3a1884c223e28cabb00e400a72ac84
+        tag: rocm-6.2.4
+  - name: hip
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ROCm/hip.git
+        commit: d3b75fbb82113374e2d6103baa96a9c61425da48
+        tag: rocm-6.2.4
+  - name: rocblas
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ROCm/rocBLAS.git
+        commit: 3171316ae7f642952fccbffc2ae0368bf67394f5
+        tag: rocm-6.2.4
+  - name: hipblas
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ROCm/hipBLAS.git
+        commit: f4095274efb0892a1ef3ce0435352849f721d393
+        tag: rocm-6.2.4
+  - name: miopen
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/app
+    sources:
+      - type: git
+        url: https://github.com/ROCm/MIOpen.git
+        commit: ba89256497cc8e98eff8fa957116d0ca7611aec5
+        tag: rocm-6.2.4
+  # Build the mutually exclusive HIP backend only after its pinned ROCm
+  # dependencies. Its Python package is installed into this extension so the
+  # engine can select it before Faster Whisper imports CTranslate2.
+  - name: ctranslate2-rocm
+    buildsystem: simple
+    build-options:
+      env:
+        CMAKE_PREFIX_PATH: /app
+        ROCM_PATH: /app
+    build-commands:
+      - cmake -S . -B build -G Ninja -DWITH_CUDA=OFF -DWITH_HIP=ON -DWITH_MKL=OFF -DWITH_OPENBLAS=OFF -DWITH_TENSOR_PARALLEL=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app
+      - cmake --build build
+      - cmake --install build
+      - python3 -m pip install --no-index --no-deps --no-build-isolation --target=/tmp/ctranslate2-pybind pybind11-2.13.6.tar.gz
+      - PYTHONPATH=/tmp/ctranslate2-pybind CTRANSLATE2_ROOT=/app python3 -m pip install --no-index --no-deps --no-build-isolation --prefix=/app ./python
+    sources:
+      - type: git
+        url: https://github.com/OpenNMT/CTranslate2.git
+        commit: 0d8bcd362ac75ef860ef161d6f0efad0ae439ff0
+        tag: v4.8.1
+      - type: file
+        url: https://files.pythonhosted.org/packages/d2/c1/72b9622fcb32ff98b054f724e213c7f70d6898baa714f4516288456ceaba/pybind11-2.13.6.tar.gz
+        sha256: ba6af10348c12b24e92fa086b39cfba0eff619b61ac77c406167d813b096d39a
+        dest-filename: pybind11-2.13.6.tar.gz
+  - name: rocm-notices
+    buildsystem: simple
+    build-commands:
+      - install -Dm644 LICENSES.md /app/share/licenses/openwhisper-amd/ROCm-NOTICE.md
+    sources:
+      - type: file
+        path: LICENSES.md

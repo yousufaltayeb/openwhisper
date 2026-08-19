@@ -15,6 +15,7 @@ from openwhisper.providers import (
     OpenAITranscriptionProvider,
     ProviderError,
     ProviderErrorKind,
+    ProviderProgressStage,
     TranscriptionRequest,
 )
 from openwhisper.providers.transport import HttpResponse
@@ -242,6 +243,23 @@ def test_faster_whisper_contract_and_streaming(audio_path: Path):
     assert len(result.segments) == 1
     assert list(provider.transcribe_stream([request]))[0].text == "مرحبا hello"
     assert len(loads) == 1
+
+
+def test_faster_whisper_reports_model_loading_until_the_model_is_ready(audio_path: Path):
+    stages = []
+
+    def factory(_model, _device, _compute_type):
+        assert [event.stage for event in stages] == [ProviderProgressStage.LOADING_MODEL]
+        return _FasterWhisperModel()
+
+    provider = FasterWhisperProvider(model_factory=factory)
+    provider.transcribe(TranscriptionRequest(audio_path, progress=stages.append))
+
+    assert [event.stage for event in stages] == [
+        ProviderProgressStage.LOADING_MODEL,
+        ProviderProgressStage.TRANSCRIBING,
+        ProviderProgressStage.COMPLETED,
+    ]
 
 
 def test_optional_cohere_local_requires_explicit_arabic_or_english(audio_path: Path):

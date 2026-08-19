@@ -7,6 +7,8 @@ a substitute for checking the shipped artifact.
 
 - [ ] `pyproject.toml`, `src/openwhisper/__init__.py`, and release notes agree
   on the version.
+- [ ] `frontend/package.json`, `src-tauri/Cargo.toml`, and `tauri.conf.json`
+  agree with the Python version.
 - [ ] Repository URLs point to `yousufaltayeb/openwhisper`.
 - [ ] CLI is `openwhisper`; application ID is
   `io.github.yousufaltayeb.OpenWhisper`.
@@ -15,12 +17,20 @@ a substitute for checking the shipped artifact.
 
 ## Quality and privacy
 
-- [ ] Run `uv run ruff check src tests`, `uv run pytest`, and `uv build` under
-  Python 3.12.
+- [ ] Run Python Ruff/tests/build, frontend tests/build/Impeccable detection,
+  npm audit, Rust fmt/tests, and the feature-gated WDIO/axe WebKitGTK path under
+  their locked Python 3.12, Node 24, and Cargo graphs.
+- [ ] Inspect the production frontend and Tauri binary to confirm WDIO plugins,
+  the global Tauri bridge, devtools, remote assets, and source maps are absent.
+- [ ] Verify the NDJSON handshake, 8 MiB limit, allowlist, timeouts, idle-only
+  restart, active-capture fatal latch, and three-second shutdown behavior.
 - [ ] Exercise a local Faster Whisper dictation from recording through
   insertion; verify audio deletion afterward.
 - [ ] Verify history retention and search with Arabic, English, and mixed text.
 - [ ] Verify both shortcut modes and cancellation.
+- [ ] On GNOME and KDE Wayland, verify four-argument portal signals, partial
+  bindings, compositor reassignment, permission decline, portal restart,
+  session closure, and push-to-talk release.
 - [ ] Verify direct X11 insertion and a Wayland clipboard fallback. Confirm RTL
   insertion preserves Arabic text.
 - [ ] Test each enabled cloud provider with mocked contract tests and a manual
@@ -37,9 +47,11 @@ a substitute for checking the shipped artifact.
 - [ ] Verify only the documented network, PulseAudio, Wayland/fallback X11,
   DRI, AT-SPI, StatusNotifier, portal, and read-only legacy-config permissions
   are present. There must be no host filesystem or broad bus access.
-- [ ] Verify desktop entry, icon, Qt Multimedia microphone capture, config
-  creation, and one-time read-only legacy migration. Existing host files must
-  remain unchanged.
+- [ ] Verify the GNOME 50 WebKitGTK application, desktop entry, new icon, Tauri
+  tray reachability fallback, Qt Multimedia capture/overlay, config creation,
+  and one-time read-only legacy migration. Existing host files remain unchanged.
+- [ ] Stop the cutover if GNOME or KDE cannot pass capture, insertion, overlay,
+  and portal tests; do not remove the Qt parity shell before this gate.
 - [ ] Install from the signed `.flatpakref`, reject a tampered repository
   summary, and prove an update from the prior beta revision.
 - [ ] Verify model weights download only on explicit use; Faster Whisper is in

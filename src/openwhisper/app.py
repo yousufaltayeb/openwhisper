@@ -25,7 +25,7 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
+        from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal, Slot
         from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
     except ImportError:
         print(
@@ -45,11 +45,33 @@ def main(argv: list[str] | None = None) -> int:
 
     from .runtime import RuntimeController
     from .ui import MainWindow, RecordingOverlay, TrayController
+    from .ui.clipboard import QtClipboardBridge
     from .ui.styles import APP_STYLESHEET
 
     application.setStyleSheet(APP_STYLESHEET)
+    clipboard = QtClipboardBridge(application)
+
+    class MainThreadBridge(QObject):
+        invoke = Signal(object)
+
+        def __init__(self) -> None:
+            super().__init__(application)
+            self.invoke.connect(self.run)
+
+        @Slot(object)
+        def run(self, callback: object) -> None:
+            if callable(callback):
+                callback()
+
+        def submit(self, callback: object) -> None:
+            self.invoke.emit(callback)
+
+    main_thread = MainThreadBridge()
     try:
-        controller = RuntimeController()
+        controller = RuntimeController(
+            clipboard=clipboard,
+            shortcut_dispatch=main_thread.submit,
+        )
     except Exception as exc:
         QMessageBox.critical(
             None,
@@ -77,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
             overlay.set_preview(str(details.get("text", "")))
         elif event == "audio-level":
             overlay.set_level(float(details.get("rms", 0)))
+        elif event == "info":
+            tray.notify("OpenWhisper", str(details.get("message", "")))
         elif event == "warning":
             tray.notify("OpenWhisper", str(details.get("message", "Warning")), True)
         elif event == "error":

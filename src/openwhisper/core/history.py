@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,12 +31,18 @@ class HistoryRecord:
     retained_audio_expires_at: datetime | None = None
     created_at: datetime | None = None
     id: str | None = None
+    # Appended after the original fields so positional embedding callers keep
+    # their pre-delivery constructor shape.
+    inserted: bool = False
+    copied: bool = False
 
     def __post_init__(self) -> None:
         if self.duration_seconds < 0:
             raise ValueError("duration_seconds cannot be negative")
         if self.latency_ms is not None and self.latency_ms < 0:
             raise ValueError("latency_ms cannot be negative")
+        if not isinstance(self.inserted, bool) or not isinstance(self.copied, bool):
+            raise ValueError("delivery flags must be boolean")
         if not self.mode_id.strip():
             raise ValueError("mode_id cannot be empty")
         for timestamp in (self.created_at, self.retained_audio_expires_at):
@@ -87,6 +93,8 @@ class SQLiteHistoryStore:
         "latency_ms": "INTEGER",
         "transform_name": "TEXT",
         "insertion_method": "TEXT",
+        "inserted": "INTEGER NOT NULL DEFAULT 0",
+        "copied": "INTEGER NOT NULL DEFAULT 0",
         "retained_audio_path": "TEXT",
         "retained_audio_expires_at": "TEXT",
     }
@@ -140,8 +148,8 @@ class SQLiteHistoryStore:
                         id, created_at, raw_text, final_text, language,
                         transcription_provider, cleanup_provider, duration_seconds, warning,
                         mode_id, cleanup_model, latency_ms, transform_name, insertion_method,
-                        retained_audio_path, retained_audio_expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        inserted, copied, retained_audio_path, retained_audio_expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _record_values(stored),
                 )
@@ -273,13 +281,43 @@ class SQLiteHistoryStore:
             self._ensure_open()
             with self._connection:
                 cursor = self._connection.execute(
-                    "UPDATE history SET insertion_method = ? WHERE id = ?",
-                    (method, record_id),
+                    """UPDATE history SET insertion_method = ?,
+                    inserted = CASE WHEN ? IN ('atspi', 'x11', 'wayland') THEN 1 ELSE inserted END,
+                    copied = CASE WHEN ? = 'clipboard' THEN 1 ELSE copied END
+                    WHERE id = ?""",
+                    (method, method, method, record_id),
                 )
             if cursor.rowcount != 1:
                 raise KeyError(record_id)
         record = self.get(record_id)
         if record is None:  # pragma: no cover
+            raise KeyError(record_id)
+        return record
+
+    def update_delivery(
+        self,
+        record_id: str,
+        *,
+        inserted: bool,
+        copied: bool,
+        insertion_method: str | None = None,
+    ) -> HistoryRecord:
+        """Persist independent insertion and clipboard outcomes."""
+
+        if not isinstance(inserted, bool) or not isinstance(copied, bool):
+            raise ValueError("delivery flags must be boolean")
+        with self._lock:
+            self._ensure_open()
+            with self._connection:
+                cursor = self._connection.execute(
+                    """UPDATE history SET inserted = ?, copied = ?,
+                    insertion_method = COALESCE(?, insertion_method) WHERE id = ?""",
+                    (int(inserted), int(copied), insertion_method, record_id),
+                )
+            if cursor.rowcount != 1:
+                raise KeyError(record_id)
+        record = self.get(record_id)
+        if record is None:  # pragma: no cover - guarded by the update lock
             raise KeyError(record_id)
         return record
 
@@ -451,6 +489,16 @@ class SQLiteHistoryStore:
                 """CREATE INDEX IF NOT EXISTS history_mode_provider
                 ON history(mode_id, transcription_provider)"""
             )
+            # Additive migration for pre-delivery history. Recover the old
+            # single outcome from insertion_method while preserving all text.
+            connection.execute(
+                """UPDATE history SET inserted = 1
+                WHERE inserted = 0 AND insertion_method IN ('atspi', 'x11', 'wayland')"""
+            )
+            connection.execute(
+                """UPDATE history SET copied = 1
+                WHERE copied = 0 AND insertion_method = 'clipboard'"""
+            )
             self._initialize_fts(connection)
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
@@ -572,6 +620,8 @@ def _record_values(record: HistoryRecord) -> tuple[object, ...]:
         record.latency_ms,
         record.transform_name,
         record.insertion_method,
+        int(record.inserted),
+        int(record.copied),
         str(record.retained_audio_path) if record.retained_audio_path else None,
         (
             _as_utc(record.retained_audio_expires_at).isoformat()
@@ -604,6 +654,15 @@ def _row_to_record(row: sqlite3.Row) -> HistoryRecord:
         latency_ms=optional("latency_ms"),
         transform_name=optional("transform_name"),
         insertion_method=optional("insertion_method"),
+        inserted=bool(
+            optional(
+                "inserted",
+                str(optional("insertion_method", "")) in {"atspi", "x11", "wayland"},
+            )
+        ),
+        copied=bool(
+            optional("copied", str(optional("insertion_method", "")) == "clipboard")
+        ),
         retained_audio_path=Path(str(audio_path)) if audio_path else None,
         retained_audio_expires_at=(
             datetime.fromisoformat(str(audio_expiry)) if audio_expiry else None

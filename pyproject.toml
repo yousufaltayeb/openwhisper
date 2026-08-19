@@ -55,6 +55,7 @@ dev = [
 ]
 [project.scripts]
 openwhisper = "openwhisper.app:main"
+openwhisper-engine = "openwhisper.engine:main"
 
 [project.urls]
 Homepage = "https://github.com/yousufaltayeb/openwhisper"

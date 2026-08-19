@@ -32,15 +32,23 @@ class RecordingOverlay(QFrame):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setStyleSheet(
-            "QFrame#RecordingOverlay { background:#151a24; border:1px solid #30394a; "
-            "border-radius:14px; } QLabel { background:transparent; }"
+            "QFrame#RecordingOverlay { background:#202220; border:1px solid #4d504b; "
+            "border-radius:8px; color:#f1efe8; } "
+            "QLabel { background:transparent; color:#f1efe8; "
+            "font-family:'Readex Pro','Noto Sans'; } "
+            "QPushButton { background:#2b2e2b; color:#f1efe8; border:1px solid #5c5f59; "
+            "border-radius:5px; padding:6px 12px; font-weight:600; } "
+            "QPushButton:hover { border-color:#8c8f87; } "
+            "QPushButton:disabled { color:#777a74; border-color:#3b3e3a; } "
+            "QProgressBar { background:#333632; border:0; border-radius:0; } "
+            "QProgressBar::chunk { background:#ec6a5b; border-radius:0; }"
         )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 12, 12)
         row = QHBoxLayout()
         self.indicator = QLabel("●")
-        self.indicator.setStyleSheet("color:#f36b72; font-size:18px")
+        self.indicator.setStyleSheet("color:#ec6a5b; font-size:18px")
         self.label = QLabel("Listening…")
         self.label.setMinimumWidth(160)
         self.label.setAccessibleName("Recording status; drag to move the overlay")
@@ -74,7 +82,7 @@ class RecordingOverlay(QFrame):
 
     def show_recording(self) -> None:
         self.indicator.setText("●")
-        self.indicator.setStyleSheet("color:#f36b72; font-size:18px")
+        self.indicator.setStyleSheet("color:#ec6a5b; font-size:18px")
         self.label.setText("Listening…")
         self.stop_button.setEnabled(True)
         self.level.setValue(0)
@@ -82,7 +90,7 @@ class RecordingOverlay(QFrame):
 
     def show_processing(self) -> None:
         self.indicator.setText("◌")
-        self.indicator.setStyleSheet("color:#67e8b2; font-size:18px")
+        self.indicator.setStyleSheet("color:#b9b9af; font-size:18px")
         self.label.setText("Transcribing…")
         self.stop_button.setEnabled(False)
         self._show_bottom_center()

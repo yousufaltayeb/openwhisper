@@ -1,0 +1,108 @@
+.meterGroup {
+  padding: 18px 20px 20px;
+  background: var(--surface-face-secondary);
+  border-block-start: 1px solid var(--seam);
+}
+
+.meterHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+  margin-block-end: 12px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+}
+
+.meterHeading output {
+  color: var(--text-primary);
+  font-family: var(--font-technical);
+  font-size: 0.75rem;
+  letter-spacing: 0;
+}
+
+.meter {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 9px;
+  block-size: 104px;
+}
+
+.scale,
+.segments {
+  display: grid;
+  grid-template-rows: repeat(18, 1fr);
+  gap: 2px;
+}
+
+.scale {
+  position: relative;
+  color: var(--text-secondary);
+  font-family: var(--font-technical);
+  font-size: 0.58rem;
+}
+
+.scale span {
+  position: absolute;
+  inset-inline-end: 0;
+  transform: translateY(-50%);
+}
+
+.scale span:nth-child(1) {
+  inset-block-start: 0;
+  transform: none;
+}
+
+.scale span:nth-child(2) {
+  inset-block-start: 20%;
+}
+
+.scale span:nth-child(3) {
+  inset-block-start: 40%;
+}
+
+.scale span:nth-child(4) {
+  inset-block-start: 60%;
+}
+
+.scale span:nth-child(5) {
+  inset-block-start: 80%;
+}
+
+.scale span:nth-child(6) {
+  inset-block-end: 0;
+  transform: none;
+}
+
+.segments {
+  grid-auto-flow: dense;
+}
+
+.segments i {
+  display: block;
+  inline-size: 100%;
+  min-block-size: 2px;
+  background: var(--seam);
+  transition: background-color 120ms ease-out;
+}
+
+.segments i[data-active="true"] {
+  background: var(--record);
+}
+
+.segments i[data-peak="true"] {
+  outline: 1px solid var(--danger);
+  outline-offset: -1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segments i {
+    transition: none;
+  }
+}
+
+:global(:root[data-reduced-motion="true"]) .segments i {
+  transition: none;
+}

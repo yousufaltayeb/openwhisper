@@ -527,6 +527,7 @@ class QtMultimediaAudioCapture:
         self._lock = threading.RLock()
         self._source: object | None = None
         self._stream: object | None = None
+        self._stream_relay: object | None = None
         self._config: AudioCaptureConfig | None = None
         self._pcm = bytearray()
         self._stream_offset = 0
@@ -574,15 +575,25 @@ class QtMultimediaAudioCapture:
         with self._lock:
             source, config = self._active()
         try:
+            backend_failed = self._source_has_error(source)
             # Qt emits the final readyRead synchronously on most backends; an
             # explicit drain also handles backends that do not.
             getattr(source, "stop")()
             self._consume_available()
+            backend_failed = backend_failed or self._source_has_error(source)
             with self._lock:
                 pcm = bytes(self._pcm)
                 self._reset()
+            if not pcm:
+                raise AudioDeviceError(self._no_audio_message(backend_failed))
             if config.trim_silence:
                 pcm = self._trim_silence(pcm, config)
+            if not pcm:
+                if backend_failed:
+                    raise AudioDeviceError(self._no_audio_message(True))
+                raise AudioDeviceError(
+                    "No speech was detected. Check the microphone input level, then try again."
+                )
             return self._write_wav(pcm, config)
         except Exception:
             with self._lock:
@@ -603,7 +614,6 @@ class QtMultimediaAudioCapture:
     def read_pcm(self) -> bytes | None:
         """Consume PCM received since the prior call for live transcription."""
 
-        self._consume_available()
         with self._lock:
             end = self._aligned_length(len(self._pcm), self._config)
             data = bytes(self._pcm[self._stream_offset : end])
@@ -615,7 +625,6 @@ class QtMultimediaAudioCapture:
 
         if minimum_duration_seconds < 0:
             raise ValueError("minimum_duration_seconds cannot be negative")
-        self._consume_available()
         with self._lock:
             config = self._config
             if config is None or self._source is None:
@@ -660,6 +669,7 @@ class QtMultimediaAudioCapture:
 
     def _start_source(self, device: object, config: AudioCaptureConfig) -> tuple[object, object]:
         try:
+            from PySide6.QtCore import QObject, Slot
             from PySide6.QtMultimedia import QAudioFormat, QAudioSource
 
             audio_format = QAudioFormat()
@@ -678,7 +688,22 @@ class QtMultimediaAudioCapture:
                     "OpenWhisper could not open the microphone. Check the Flatpak microphone "
                     "permission and that no other app has exclusive access."
                 )
-            stream.readyRead.connect(self._consume_available)
+            if self._source_has_error(source):
+                source.stop()
+                raise AudioDeviceError(self._no_audio_message(True))
+
+            capture = self
+
+            class StreamRelay(QObject):
+                """Give readyRead a Qt-affine receiver instead of a plain Python callable."""
+
+                @Slot()
+                def consume(self) -> None:
+                    capture._consume_available()
+
+            relay = StreamRelay(source)
+            stream.readyRead.connect(relay.consume)
+            self._stream_relay = relay
             return source, stream
         except AudioDeviceError:
             raise
@@ -687,6 +712,33 @@ class QtMultimediaAudioCapture:
                 "OpenWhisper could not start the microphone. Check the selected device and "
                 "the Flatpak microphone permission."
             ) from exc
+
+    @staticmethod
+    def _source_has_error(source: object) -> bool:
+        """Read QAudioSource errors without importing Qt into core test runs."""
+
+        try:
+            error = getattr(source, "error")()
+        except Exception:
+            return False
+        if error is None or error == 0:
+            return False
+        value = getattr(error, "value", None)
+        if value == 0:
+            return False
+        return getattr(error, "name", "") != "NoError"
+
+    @staticmethod
+    def _no_audio_message(backend_failed: bool) -> str:
+        if backend_failed:
+            return (
+                "OpenWhisper received no microphone audio. Check that PipeWire or PulseAudio "
+                "is running and that the Flatpak has microphone permission."
+            )
+        return (
+            "OpenWhisper received no microphone audio. Check the input level and microphone "
+            "permission, then try again."
+        )
 
     def _consume_available(self) -> None:
         with self._lock:
@@ -808,6 +860,7 @@ class QtMultimediaAudioCapture:
     def _reset(self) -> None:
         self._source = None
         self._stream = None
+        self._stream_relay = None
         self._config = None
         self._pcm.clear()
         self._stream_offset = 0

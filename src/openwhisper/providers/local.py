@@ -67,8 +67,10 @@ class FasterWhisperProvider:
         try:
             emit_progress(self.name, request.progress, ProviderProgressStage.LOADING_MODEL)
             ensure_not_cancelled(self.name, request.cancellation)
+            model = self._get_model()
+            ensure_not_cancelled(self.name, request.cancellation)
             emit_progress(self.name, request.progress, ProviderProgressStage.TRANSCRIBING)
-            raw_segments, info = self._get_model().transcribe(
+            raw_segments, info = model.transcribe(
                 str(request.audio_path),
                 language=_language_hint(request.language),
                 initial_prompt=_recognition_prompt(request),
@@ -265,9 +267,40 @@ class CohereArabicLocalProvider:
 
 
 def _default_faster_whisper_model(model: str, device: str, compute_type: str) -> Any:
+    # Public settings use vendor names; CTranslate2's HIP and CUDA builds
+    # expose the same ``cuda`` device token. The selected Flatpak extension is
+    # added by ``_load_accelerator_extension`` before this import.
+    _load_accelerator_extension(device)
     from faster_whisper import WhisperModel
 
-    return WhisperModel(model, device=device, compute_type=compute_type)
+    runtime_device = {"nvidia": "cuda", "amd": "cuda"}.get(device, device)
+    return WhisperModel(model, device=runtime_device, compute_type=compute_type)
+
+
+def _load_accelerator_extension(device: str) -> None:
+    """Prepend the matching optional CTranslate2 extension before import."""
+
+    import os
+    import sys
+
+    if device == "nvidia":
+        root = os.environ.get("OPENWHISPER_NVIDIA_EXTENSION")
+    elif device == "amd":
+        root = os.environ.get("OPENWHISPER_AMD_EXTENSION")
+    else:
+        root = None
+    if not root:
+        return
+    root = os.path.abspath(root)
+    lib = os.path.join(root, "lib")
+    site_packages = [
+        os.path.join(root, "lib", entry, "site-packages")
+        for entry in os.listdir(os.path.join(root, "lib"))
+        if entry.startswith("python")
+    ] if os.path.isdir(os.path.join(root, "lib")) else []
+    for candidate in [lib, *site_packages]:
+        if os.path.isdir(candidate) and candidate not in sys.path:
+            sys.path.insert(0, candidate)
 
 
 def _default_cohere_pipeline(model: str, device: str) -> Callable[..., object]:

@@ -12,6 +12,7 @@ from .audio import (
     QtMultimediaAudioCapture,
     TempAudioManager,
 )
+from .compute import ComputeBackend, ComputeCapability, ComputeProbe, ComputeProbeResult
 from .config import AppConfig, AppPaths, ConfigStore, migrate_legacy_config
 from .desktop import (
     AtspiAccessibilityBackend,
@@ -30,6 +31,7 @@ from .insertion import (
     DesktopTextInserter,
     InsertionMethod,
     InsertionResult,
+    OutputMode,
     WaylandTextBackend,
     X11TextBackend,
     contains_rtl,
@@ -102,6 +104,10 @@ __all__ = [
     "CommandValidator",
     "ConfigurationProposal",
     "ConfigStore",
+    "ComputeBackend",
+    "ComputeCapability",
+    "ComputeProbe",
+    "ComputeProbeResult",
     "ContextPolicy",
     "ContextSource",
     "DesktopSession",
@@ -115,6 +121,7 @@ __all__ = [
     "HistoryStatistics",
     "InsertionMethod",
     "InsertionResult",
+    "OutputMode",
     "InsertionTarget",
     "KeyAction",
     "ModeDefinition",

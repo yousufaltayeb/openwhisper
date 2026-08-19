@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -8,15 +9,22 @@ import pytest
 from openwhisper import runtime
 from openwhisper.core import (
     AppPaths,
+    AudioDeviceError,
+    CapturedAudio,
     HistoryRecord,
     InsertionMethod,
     InsertionResult,
     ModeDefinition,
+    SessionOutcome,
+    SessionState,
+    ShortcutController,
+    ShortcutMode,
     Snippet,
     VocabularyEntry,
 )
 from openwhisper.runtime import (
     FinalizingTextInserter,
+    GlobalShortcutService,
     LiveInsertionState,
     RuntimeController,
     X11PasteBackend,
@@ -43,7 +51,161 @@ def test_runtime_defaults_to_private_local_provider(tmp_path):
         assert settings.retain_audio is False
         assert settings.audio_retention_days == 7
         assert settings.active_mode_id == "raw"
+        assert settings.onboarding_completed is False
+        assert controller.is_first_run()
         assert not controller.has_api_key("openai")
+    finally:
+        controller.shutdown()
+
+
+def test_x11_toggle_shortcut_releases_debounce_between_activations() -> None:
+    recording = False
+    calls = []
+
+    def start():
+        nonlocal recording
+        recording = True
+        calls.append("start")
+
+    def stop():
+        nonlocal recording
+        recording = False
+        calls.append("stop")
+
+    gesture = ShortcutController(
+        ShortcutMode.TOGGLE,
+        start_recording=start,
+        stop_recording=stop,
+        is_recording=lambda: recording,
+    )
+    service = GlobalShortcutService("<alt>+o", ShortcutMode.TOGGLE, gesture)
+    service._keycode = 32
+    service._modifier_mask = 8
+    service._ignored_modifier_mask = 18
+
+    def event(event_type, state=8):
+        return type("Event", (), {"type": event_type, "detail": 32, "state": state})()
+
+    service._handle_event(event(service._KEY_PRESS), 0.0)
+    service._handle_event(event(service._KEY_PRESS), 0.01)  # Key repeat is ignored.
+    service._handle_event(event(service._KEY_RELEASE), 0.02)
+    service._flush_release(0.06)
+    service._handle_event(event(service._KEY_PRESS, state=8 | 2), 0.07)
+    service._handle_event(event(service._KEY_RELEASE), 0.08)
+    service._flush_release(0.12)
+
+    assert calls == ["start", "stop"]
+    assert gesture.is_pressed is False
+
+
+def test_x11_shortcut_dispatches_gesture_edges_to_the_ui_thread() -> None:
+    recording = False
+    calls = []
+    queued = []
+
+    def start():
+        nonlocal recording
+        recording = True
+        calls.append("start")
+
+    gesture = ShortcutController(
+        ShortcutMode.TOGGLE,
+        start_recording=start,
+        stop_recording=lambda: calls.append("stop"),
+        is_recording=lambda: recording,
+    )
+    service = GlobalShortcutService(
+        "<alt>+o",
+        ShortcutMode.TOGGLE,
+        gesture,
+        dispatch=queued.append,
+    )
+    service._keycode = 32
+    service._modifier_mask = 8
+    service._ignored_modifier_mask = 18
+    event = type("Event", (), {"type": service._KEY_PRESS, "detail": 32, "state": 24})()
+
+    service._handle_event(event, 0.0)
+
+    assert calls == []
+    assert len(queued) == 1
+    queued.pop()()
+    assert calls == ["start"]
+
+
+def test_runtime_uses_the_shell_clipboard_adapter(tmp_path):
+    class Clipboard:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def copy(self, text: str) -> None:
+            self.value = text
+
+        def read(self) -> str:
+            return self.value
+
+    clipboard = Clipboard()
+    controller = RuntimeController(
+        paths=paths(tmp_path),
+        environment={},
+        clipboard=clipboard,
+    )
+    try:
+        result = controller._desktop_integration().insert("recognized text")
+
+        assert result.method is InsertionMethod.CLIPBOARD
+        assert clipboard.value == "recognized text"
+    finally:
+        controller.shutdown()
+
+
+def test_onboarding_remains_pending_until_explicit_completion(tmp_path):
+    app_paths = paths(tmp_path)
+    controller = RuntimeController(paths=app_paths, environment={})
+    try:
+        controller.save_settings(replace(controller.settings(), onboarding_completed=True))
+        assert not controller.is_first_run()
+    finally:
+        controller.shutdown()
+
+    reopened = RuntimeController(paths=app_paths, environment={})
+    try:
+        assert not reopened.is_first_run()
+        assert reopened.settings().onboarding_completed is True
+    finally:
+        reopened.shutdown()
+
+
+def test_microphone_probe_waits_for_frames_and_removes_probe_audio(tmp_path, monkeypatch):
+    waited = []
+
+    class ProbeCapture:
+        def __init__(self, manager, *, default_config):
+            self.manager = manager
+            self.config = default_config
+            self.is_recording = False
+
+        def start(self):
+            self.is_recording = True
+
+        def stop(self):
+            self.is_recording = False
+            path = self.manager.create_path()
+            return type("ProbeAudio", (), {"path": path})()
+
+        def cancel(self):
+            self.is_recording = False
+
+    monkeypatch.setattr(runtime, "QtMultimediaAudioCapture", ProbeCapture)
+    monkeypatch.setattr(runtime, "_wait_for_qt_audio_sample", lambda: waited.append(True))
+    controller = RuntimeController(paths=paths(tmp_path), environment={})
+    try:
+        ready, message = controller.test_microphone("device-id")
+
+        assert ready
+        assert "returned audio" in message
+        assert waited == [True]
+        assert list(controller.paths.audio_temp_dir.iterdir()) == []
     finally:
         controller.shutdown()
 
@@ -123,10 +285,21 @@ def test_startup_deletes_only_managed_stale_audio(tmp_path):
 class MemoryInserter:
     def __init__(self):
         self.values = []
+        self.copies = []
 
-    def insert(self, text):
+    def insert(self, text, output_mode="insert"):
+        if output_mode == "clipboard":
+            self.copies.append(text)
+            return InsertionResult(
+                InsertionMethod.CLIPBOARD,
+                inserted=False,
+                copied=True,
+            )
         self.values.append(text)
         return InsertionResult(InsertionMethod.X11)
+
+    def copy(self, text):
+        self.copies.append(text)
 
 
 class MemoryClipboard:
@@ -210,6 +383,20 @@ def test_finalizer_aligns_a_corrected_final_transcript_instead_of_counting_words
     assert result.method is InsertionMethod.X11
 
 
+def test_live_typing_with_copy_mode_never_attempts_final_insertion() -> None:
+    inserter = MemoryInserter()
+    state = LiveInsertionState(inserter, lambda *_args: None)
+    finalizer = FinalizingTextInserter(inserter, state, output_mode="clipboard")
+    state.insert_chunk("مرحبا hello")
+
+    result = finalizer.insert("مرحبا hello from OpenWhisper")
+
+    assert inserter.values == ["مرحبا hello"]
+    assert inserter.copies == ["مرحبا hello from OpenWhisper"]
+    assert result.inserted is True
+    assert result.copied is True
+
+
 def test_runtime_prefers_user_mediated_portal_shortcut_for_toggle(tmp_path, monkeypatch) -> None:
     created = []
 
@@ -219,8 +406,9 @@ def test_runtime_prefers_user_mediated_portal_shortcut_for_toggle(tmp_path, monk
             return True
 
     class Portal:
-        def __init__(self, _transport, *, on_error):
+        def __init__(self, _transport, *, on_error, on_status):
             self.on_error = on_error
+            self.on_status = on_status
             self.unregistered = False
             created.append(self)
 
@@ -334,3 +522,121 @@ def test_command_actions_use_local_history_and_confirmed_mode_changes(tmp_path, 
         assert commands == [["xdotool", "key", "--clearmodifiers", "Return"]]
     finally:
         controller.shutdown()
+
+
+def test_shutdown_contains_desktop_resource_failures_and_remains_idempotent():
+    calls: list[str] = []
+
+    class FailingShortcut:
+        def stop(self):
+            calls.append("shortcut")
+            raise RuntimeError("display already closed")
+
+    class FailingPortal:
+        def unregister(self):
+            calls.append("portal")
+            raise RuntimeError("portal session already closed")
+
+    class FailingSession:
+        def cancel(self):
+            calls.append("session")
+            raise RuntimeError("session already closed")
+
+    class FailingClose:
+        def __init__(self, label):
+            self.label = label
+
+        def close(self):
+            calls.append(self.label)
+            raise RuntimeError(f"{self.label} already closed")
+
+    class ClosingHistory:
+        def close(self):
+            calls.append("history")
+
+    controller = RuntimeController.__new__(RuntimeController)
+    controller._closed = False
+    controller._shortcut_services = [FailingShortcut()]
+    controller._shortcut_service = controller._shortcut_services[0]
+    controller._portal_shortcut = FailingPortal()
+    controller._stop_live_worker = lambda *, join: calls.append(f"worker:{join}")
+    controller._session = FailingSession()
+    controller._local_editing_provider = FailingClose("provider")
+    controller.personalization = FailingClose("personalization")
+    controller.history = ClosingHistory()
+
+    controller.shutdown()
+    controller.shutdown()
+
+    assert calls == [
+        "shortcut",
+        "portal",
+        "worker:False",
+        "session",
+        "provider",
+        "personalization",
+        "history",
+    ]
+
+
+def test_processing_surfaces_actionable_microphone_failure(tmp_path):
+    controller = RuntimeController(paths=paths(tmp_path), environment={})
+    events = []
+
+    class SilentCaptureSession:
+        def stop_and_process(self):
+            raise AudioDeviceError(
+                "OpenWhisper received no microphone audio. Check the input level."
+            )
+
+    try:
+        controller.subscribe(lambda event, payload: events.append((event, payload)))
+        controller._session = SilentCaptureSession()
+        controller._stop_live_worker = lambda *, join: None
+
+        controller._process_recording()
+
+        assert events[-1] == (
+            "error",
+            {"message": ("OpenWhisper received no microphone audio. Check the input level.")},
+        )
+    finally:
+        controller.shutdown()
+
+
+def test_runtime_stops_qt_capture_before_starting_provider_worker(tmp_path):
+    caller_thread = threading.get_ident()
+    stopped_on = []
+    processed_on = []
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+
+    class SplitSession:
+        def stop_capture(self):
+            stopped_on.append(threading.get_ident())
+            return CapturedAudio(tmp_path / "captured.wav", 1.0)
+
+        def process_captured(self, _captured):
+            processed_on.append(threading.get_ident())
+            worker_started.set()
+            assert release_worker.wait(timeout=1)
+            return SessionOutcome(SessionState.COMPLETED)
+
+    controller = RuntimeController.__new__(RuntimeController)
+    controller._session = SplitSession()
+    controller._processing_thread = None
+    controller._stop_live_worker = lambda *, join: None
+    controller._emit = lambda *_args: None
+    controller._live_capture = None
+    controller._live_provider = None
+    controller._live_state = None
+
+    controller._stop_recording()
+    assert worker_started.wait(timeout=1)
+    worker = controller._processing_thread
+    assert worker is not None
+    release_worker.set()
+    worker.join(timeout=1)
+
+    assert stopped_on == [caller_thread]
+    assert processed_on and processed_on[0] != caller_thread

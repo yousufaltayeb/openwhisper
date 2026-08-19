@@ -4,8 +4,10 @@ OpenWhisper تطبيق إملاء صوتي لسطح مكتب لينكس، صُم
 والإنجليزية والانتقال الطبيعي بينهما في الجملة نفسها. يعمل محلياً افتراضياً عبر
 Faster Whisper، ويمكنك إضافة مفاتيحك الخاصة لمزوّدي الخدمات السحابية المدعومين.
 
-إصدار 0.1 موجّه إلى Linux x86_64 وPython 3.12 وPySide6، وهو إصدار أولي. استخدمه
-في مهامك الشخصية وأبلغ عن المشاكل القابلة لإعادة الإنتاج. [English README](README.md)
+إصدار 0.1 موجّه إلى Linux x86_64 بواجهة Capture مبنية بـ React/Tauri ومحرك
+Python خاص. يبقى PySide6 مسؤولاً عن التسجيل وQt Multimedia والبوابات والنافذة
+العائمة التي لا تسحب التركيز. هذا إصدار أولي؛ استخدمه في مهامك الشخصية وأبلغ
+عن المشاكل القابلة لإعادة الإنتاج. [English README](README.md)
 
 ![عرض الإملاء بالإنجليزية والعربية](docs/images/openwhisper-demo.gif)
 
@@ -98,8 +100,14 @@ Qwen3 4B بصيغة GGUF Q4_K_M عند الطلب للتنظيف والتحوي�
 
 ## التطوير والمساهمة
 
-للتطوير من المصدر استخدم `uv sync --extra dev` ثم `uv run openwhisper`. للمساهمة
-وفتح بلاغات المشاكل، راجع [CONTRIBUTING.md](CONTRIBUTING.md) و[قوالب
+للتطوير من المصدر استخدم Python 3.12 وNode 24 وRust، ثم نفّذ
+`uv sync --extra dev` و`npm --prefix frontend ci` و`npm run tauri:dev`.
+يمكن تشغيل حالات واجهة حتمية بلا تسجيل أو شبكة عبر `npm run frontend:dev`،
+كما يفحص `npm run e2e:build` ثم `npm run e2e` نافذة Tauri الحقيقية باستخدام
+WebKitGTK وaxe؛ إضافات الاختبار لا تدخل بناء الإصدار.
+تبقى الواجهة القديمة متاحة مؤقتاً للمقارنة عبر `uv run openwhisper` حتى ينجح
+اختبار التكافؤ على GNOME وKDE. للمساهمة وفتح بلاغات المشاكل، راجع
+[CONTRIBUTING.md](CONTRIBUTING.md) و[قوالب
 البلاغات](.github/ISSUE_TEMPLATE). لا يوجد مسار توزيع بديل أو مثبّت محلي.
 
 المعرّف الرسمي للتطبيق هو `io.github.yousufaltayeb.OpenWhisper`، واسم أمر الطرفية

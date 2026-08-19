@@ -23,7 +23,8 @@ this vendored code must retain the applicable upstream MIT notice and license.
 
 OpenWhisper depends on independently licensed packages and model assets,
 including Faster Whisper, CTranslate2, PySide6/Qt, pynput, cryptography,
-huggingface-hub, platformdirs, and their transitive dependencies. The Flatpak
+huggingface-hub, platformdirs, React, React Aria Components, Lucide, Readex Pro,
+IBM Plex Mono, Tauri, and their transitive dependencies. The Flatpak
 also builds CPU-only llama.cpp. Optional packs add Cohere,
 OpenAI, Groq, Deepgram, PyTorch, Transformers, and associated dependencies.
 Model weights are obtained from their upstream publishers at runtime and are not

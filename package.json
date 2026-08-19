@@ -1,0 +1,12 @@
+{
+  "name": "openwhisper-desktop",
+  "private": true,
+  "scripts": {
+    "tauri:dev": "npm --prefix frontend run tauri:dev",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "frontend:test": "npm --prefix frontend test",
+    "e2e:build": "cd src-tauri && ../frontend/node_modules/.bin/tauri build --debug --no-bundle --features e2e --config tauri.e2e.conf.json",
+    "e2e": "npm --prefix frontend run e2e"
+  }
+}

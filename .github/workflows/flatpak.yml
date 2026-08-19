@@ -18,17 +18,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
       - name: Install validation tools
         run: >-
           sudo apt-get update && sudo apt-get install -y
           appstream flatpak flatpak-builder libegl1 libgl1
-          libxkbcommon-x11-0 libxcb-cursor0
+          libxkbcommon-x11-0 libxcb-cursor0 libwebkit2gtk-4.1-dev
+          libayatana-appindicator3-dev librsvg2-dev xvfb
       - name: Check application metadata and least-privilege policy
         run: |
           python3 packaging/flatpak/lint-manifest.py
           appstreamcli validate --no-net packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
           flatpak-builder --show-manifest packaging/flatpak/io.github.yousufaltayeb.OpenWhisper.yml >/dev/null
-      - name: Test Python contracts
+      - name: Test Python, frontend, and Rust contracts
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
@@ -38,6 +44,18 @@ jobs:
           uv run --frozen --extra dev pytest
           uv run --frozen --extra dev python packaging/flatpak/check-licenses.py
           uv build
+          npm --prefix frontend ci
+          npm --prefix frontend audit
+          npm --prefix frontend test
+          npm --prefix frontend run build
+          npx --yes impeccable@3.5.0 detect --json frontend/src
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo test --locked --all-features --manifest-path src-tauri/Cargo.toml
+          (cd src-tauri && ../frontend/node_modules/.bin/tauri build --debug --no-bundle --features e2e --config tauri.e2e.conf.json)
+          xvfb-run -a npm --prefix frontend run e2e
+          npm --prefix frontend run tauri:build -- --debug --no-bundle
+          ! strings src-tauri/target/debug/openwhisper | grep -Eiq 'tauri-plugin-wdio|wdio-webdriver'
+          ! grep -REiq 'webdriver|wdio' frontend/dist
 
   publish:
     if: >-
@@ -58,7 +76,7 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/setup-python@v5
         with:
-          # KDE 6.11 inherits Python 3.13 from Freedesktop SDK 25.08. Native
+          # GNOME 50 inherits Python 3.13 from Freedesktop SDK 25.08. Native
           # release wheels must use the same ABI as the Flatpak builder.
           python-version: "3.13"
       - name: Install Flatpak build tools
@@ -66,12 +84,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y flatpak flatpak-builder
           python -m pip install uv
-      - name: Install KDE SDK/runtime
+      - name: Install GNOME SDK/runtime and build-only toolchains
         run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user --noninteractive flathub org.kde.Sdk//6.11 org.kde.Platform//6.11
-          sdk_python=$(flatpak run --user --command=python3 org.kde.Sdk//6.11 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-          runtime_python=$(flatpak run --user --command=python3 org.kde.Platform//6.11 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          flatpak install --user --noninteractive flathub \
+            org.gnome.Sdk//50 org.gnome.Platform//50 \
+            org.freedesktop.Sdk.Extension.node24//25.08 \
+            org.freedesktop.Sdk.Extension.rust-stable//25.08
+          sdk_python=$(flatpak run --user --command=python3 org.gnome.Sdk//50 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+          runtime_python=$(flatpak run --user --command=python3 org.gnome.Platform//50 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
           host_python=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
           test "$sdk_python" = 3.13
           test "$runtime_python" = "$sdk_python"

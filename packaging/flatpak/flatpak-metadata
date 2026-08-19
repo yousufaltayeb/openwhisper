@@ -1,0 +1,5 @@
+[Application]
+# AMD compute uses Flatpak's device mediation introduced for the 1.18
+# release. Keep this requirement in the deployed application metadata so an
+# older host refuses the app instead of silently exposing a broken backend.
+required-flatpak=1.18;

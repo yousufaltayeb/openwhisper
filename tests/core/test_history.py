@@ -60,7 +60,7 @@ def test_history_adds_optional_columns_to_an_early_schema(tmp_path: Path) -> Non
     with SQLiteHistoryStore(database) as store:
         saved = store.add(record("migrated schema"))
         assert store.search()[0].id == saved.id
-        assert store.schema_version == 3
+        assert store.schema_version == 4
 
 
 def test_history_filters_updates_statistics_and_recovers_last_transcript(tmp_path: Path) -> None:
@@ -161,3 +161,18 @@ def test_history_rejects_audio_outside_its_managed_directory(tmp_path: Path) -> 
                     retained_audio_path=outside,
                 )
             )
+
+
+def test_history_delivery_flags_are_independent_and_survive_restart(tmp_path: Path) -> None:
+    database = tmp_path / "history.sqlite3"
+    with SQLiteHistoryStore(database) as store:
+        saved = store.add(record("delivered"))
+        store.update_delivery(saved.id, inserted=True, copied=True, insertion_method="x11")
+        assert store.get(saved.id).inserted
+        assert store.get(saved.id).copied
+
+    with SQLiteHistoryStore(database) as reopened:
+        restored = reopened.get(saved.id)
+        assert restored is not None
+        assert restored.inserted is True
+        assert restored.copied is True

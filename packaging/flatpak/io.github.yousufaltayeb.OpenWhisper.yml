@@ -1,7 +1,11 @@
 app-id: io.github.yousufaltayeb.OpenWhisper
-runtime: org.kde.Platform
-runtime-version: "6.11"
-sdk: org.kde.Sdk
+runtime: org.gnome.Platform
+runtime-version: "50"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node24
+  - org.freedesktop.Sdk.Extension.rust-stable
+metadata: flatpak-metadata
 command: openwhisper
 rename-icon: io.github.yousufaltayeb.OpenWhisper
 add-extensions:
@@ -10,6 +14,21 @@ add-extensions:
     bundle: true
     autodelete: false
     no-autodownload: true
+  io.github.yousufaltayeb.OpenWhisper.Nvidia:
+    directory: extensions/io.github.yousufaltayeb.OpenWhisper.Nvidia
+    bundle: true
+    autodelete: false
+    no-autodownload: true
+    # Keep vendor libraries out of the CPU image. When this signed extension
+    # is present Flatpak adds only its lib directory to the loader path; the
+    # engine still probes before selecting this backend.
+    add-ld-path: lib
+  io.github.yousufaltayeb.OpenWhisper.Amd:
+    directory: extensions/io.github.yousufaltayeb.OpenWhisper.Amd
+    bundle: true
+    autodelete: false
+    no-autodownload: true
+    add-ld-path: lib
 finish-args:
   # Model downloads and explicitly configured BYOK providers only. No
   # telemetry endpoint is present in the application.
@@ -25,6 +44,9 @@ finish-args:
   # Standard portal service only; this is not a broad session-bus grant. It is
   # used for the user-mediated Secret and Global Shortcuts portal requests.
   - --talk-name=org.freedesktop.portal.Desktop
+  # Tauri's Linux notification backend uses the standard freedesktop
+  # notification service directly. Keep this scoped to that single bus name.
+  - --talk-name=org.freedesktop.Notifications
   # Qt registers tray items through the watcher; no arbitrary D-Bus name
   # ownership is required.
   - --talk-name=org.kde.StatusNotifierWatcher
@@ -32,6 +54,8 @@ finish-args:
   - --filesystem=xdg-config/whisper:ro
   - --env=OPENWHISPER_FLATPAK=1
   - --env=OPENWHISPER_COHERE_LOCAL_EXTENSION=/app/extensions/io.github.yousufaltayeb.OpenWhisper.CohereLocal
+  - --env=OPENWHISPER_NVIDIA_EXTENSION=/app/extensions/io.github.yousufaltayeb.OpenWhisper.Nvidia
+  - --env=OPENWHISPER_AMD_EXTENSION=/app/extensions/io.github.yousufaltayeb.OpenWhisper.Amd
   - --env=PYTHONNOUSERSITE=1
 modules:
   # CPU-only llama.cpp is part of the core runtime for the managed private
@@ -51,22 +75,41 @@ modules:
   - name: openwhisper
     buildsystem: simple
     build-options:
+      append-path: /usr/lib/sdk/node24/bin:/usr/lib/sdk/rust-stable/bin
       env:
         PYTHONNOUSERSITE: "1"
+        CARGO_HOME: /run/build/openwhisper/cargo
+        CARGO_NET_OFFLINE: "true"
+        npm_config_cache: /run/build/openwhisper/flatpak-node/npm-cache
+        npm_config_offline: "true"
+        npm_config_audit: "false"
+        npm_config_fund: "false"
     build-commands:
       # `prepare-sources.py` creates this locked wheelhouse before a release.
       # The builder is invoked with --disable-download in CI and release jobs.
       - "python3 -m pip install --only-binary=:all: --no-index --find-links=packaging/flatpak/wheels --prefix=/app -r packaging/flatpak/requirements-core.txt"
       - "python3 -m pip install --only-binary=:all: --no-deps --no-index --prefix=/app packaging/flatpak/wheels/openwhisper-*.whl"
+      # Node and Rust are build-only SDK extensions. Both dependency graphs are
+      # fetched as checksum-pinned Flatpak sources before the offline build.
+      - npm --prefix frontend ci --offline --no-audit --no-fund
+      - npm --prefix frontend run build
+      - cargo --offline build --locked --release --features custom-protocol --manifest-path src-tauri/Cargo.toml
+      # Replace the Python console script with the Tauri host; the private
+      # openwhisper-engine entry point remains beside it under /app/bin.
+      - install -Dm755 src-tauri/target/release/openwhisper /app/bin/openwhisper
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.desktop /app/share/applications/io.github.yousufaltayeb.OpenWhisper.desktop
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.metainfo.xml /app/share/metainfo/io.github.yousufaltayeb.OpenWhisper.metainfo.xml
       - install -Dm644 packaging/linux/io.github.yousufaltayeb.OpenWhisper.svg /app/share/icons/hicolor/scalable/apps/io.github.yousufaltayeb.OpenWhisper.svg
+      - install -Dm644 frontend/public/licenses/Readex-Pro-OFL-1.1.txt /app/share/licenses/openwhisper/Readex-Pro-OFL-1.1.txt
+      - install -Dm644 frontend/public/licenses/IBM-Plex-Mono-OFL-1.1.txt /app/share/licenses/openwhisper/IBM-Plex-Mono-OFL-1.1.txt
       - install -Dm644 LICENSE /app/share/licenses/openwhisper/LICENSE
       - install -Dm644 NOTICE.md /app/share/licenses/openwhisper/NOTICE.md
       - install -Dm644 packaging/flatpak/LICENSES.md /app/share/licenses/openwhisper/BUNDLED-LICENSES.md
     sources:
       - type: dir
         path: ../..
+      - cargo-sources.json
+      - npm-sources.json
   - name: openwhisper-cohere-local-extension
     buildsystem: simple
     build-commands:

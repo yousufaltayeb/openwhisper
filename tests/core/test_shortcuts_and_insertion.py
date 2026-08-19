@@ -105,6 +105,7 @@ def test_desktop_insertion_uses_exact_rtl_text_and_falls_back_safely() -> None:
     )
     result = fallback.insert(text)
     assert result.method is InsertionMethod.CLIPBOARD
+    assert result.warning is None
     assert clipboard.value == text
 
     broken = DesktopTextInserter(
@@ -137,3 +138,17 @@ def test_desktop_session_detection_and_command_backend_arguments() -> None:
 def test_inserter_rejects_empty_text() -> None:
     with pytest.raises(ValueError, match="empty"):
         DesktopTextInserter(session=DesktopSession.UNKNOWN, clipboard=Clipboard()).insert("")
+
+
+def test_inserter_preserves_a_completed_transcript_when_clipboard_copy_fails() -> None:
+    class UnavailableClipboard:
+        def copy(self, _text: str) -> None:
+            raise RuntimeError("clipboard unavailable")
+
+    result = DesktopTextInserter(
+        session=DesktopSession.UNKNOWN,
+        clipboard=UnavailableClipboard(),
+    ).insert("recognized text")
+
+    assert result.method is InsertionMethod.UNAVAILABLE
+    assert result.warning == DesktopTextInserter.clipboard_failure_warning

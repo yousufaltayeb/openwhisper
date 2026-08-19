@@ -19,6 +19,8 @@ class FakePortal:
         self.requests = []
         self.subscriptions = {}
         self.closed = []
+        self.session_watchers = {}
+        self.service_watchers = []
 
     @property
     def available(self) -> bool:
@@ -35,6 +37,19 @@ class FakePortal:
 
     def close_session(self, session_handle) -> None:
         self.closed.append(session_handle)
+
+    def watch_session(self, session_handle, callback) -> None:
+        self.session_watchers[session_handle] = callback
+
+    def unwatch_session(self, session_handle, callback) -> None:
+        self.session_watchers.pop(session_handle, None)
+
+    def watch_service(self, callback) -> None:
+        self.service_watchers.append(callback)
+
+    def unwatch_service(self, callback) -> None:
+        if callback in self.service_watchers:
+            self.service_watchers.remove(callback)
 
 
 class Clipboard:
@@ -87,12 +102,22 @@ def test_portal_shortcut_waits_for_user_mediated_session_and_binding() -> None:
     assert portal.requests[1][1][2] == ""
     assert "handle_token" in portal.requests[1][1][3]
 
-    portal.requests[1][2](0, {})
+    portal.requests[1][2](
+        0,
+        {"shortcuts": (("dictation", {"trigger_description": "Ctrl+Alt+O"}),)},
+    )
+    assert backend.state == "listing"
+    assert portal.requests[2][0] == "ListShortcuts"
+    portal.requests[2][2](
+        0,
+        {"shortcuts": (("dictation", {"trigger_description": "Ctrl+Alt+O"}),)},
+    )
     assert backend.state == "ready"
-    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/1", "dictation", {}))
-    portal.subscriptions["Activated"](("/another", "dictation", {}))
-    portal.subscriptions["Deactivated"](("/org/freedesktop/portal/session/1", "dictation", {}))
-    portal.subscriptions["Deactivated"](("/another", "dictation", {}))
+    assert backend.assigned_shortcuts == {"dictation": "Ctrl+Alt+O"}
+    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/1", "dictation", 10, {}))
+    portal.subscriptions["Activated"](("/another", "dictation", 11, {}))
+    portal.subscriptions["Deactivated"](("/org/freedesktop/portal/session/1", "dictation", 12, {}))
+    portal.subscriptions["Deactivated"](("/another", "dictation", 13, {}))
     assert activations == ["on"]
     assert deactivations == ["off"]
 
@@ -116,10 +141,40 @@ def test_portal_binds_and_dispatches_multiple_mode_shortcuts() -> None:
 
     shortcuts = portal.requests[1][1][1]
     assert [shortcut[0] for shortcut in shortcuts] == ["dictation", "mode-email"]
-    portal.requests[1][2](0, {})
-    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/2", "mode-email", {}))
-    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/2", "unknown", {}))
+    portal.requests[1][2](
+        0,
+        {"shortcuts": (("mode-email", {"trigger_description": "Ctrl+Alt+E"}),)},
+    )
+    portal.requests[2][2](
+        0,
+        {"shortcuts": (("mode-email", {"trigger_description": "Ctrl+Alt+E"}),)},
+    )
+    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/2", "mode-email", 20, {}))
+    portal.subscriptions["Activated"](("/org/freedesktop/portal/session/2", "unknown", 21, {}))
     assert activations == ["email"]
+
+
+def test_portal_handles_decline_session_close_and_restart() -> None:
+    portal = FakePortal()
+    errors = []
+    statuses = []
+    backend = PortalGlobalShortcutBackend(portal, on_error=errors.append, on_status=statuses.append)
+    backend.register("CTRL+ALT+O", lambda: None)
+    portal.requests[0][2](0, {"session_handle": "/org/freedesktop/portal/session/3"})
+    portal.requests[1][2](1, {})
+    assert backend.state == "idle"
+    assert statuses[-1]["state"] == "unavailable"
+
+    backend.register("CTRL+ALT+O", lambda: None)
+    portal.requests[-1][2](0, {"session_handle": "/org/freedesktop/portal/session/4"})
+    portal.session_watchers["/org/freedesktop/portal/session/4"]()
+    assert backend.state == "idle"
+    assert "closed" in errors[-1]
+
+    backend.register("CTRL+ALT+O", lambda: None)
+    portal.service_watchers[-1](False)
+    assert backend.state == "idle"
+    assert "restarted" in errors[-1]
 
 
 def test_context_is_opt_in_and_protected_fields_are_never_read() -> None:

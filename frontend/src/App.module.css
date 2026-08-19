@@ -1,0 +1,5 @@
+.application {
+  min-block-size: 100vh;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}

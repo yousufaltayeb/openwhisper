@@ -37,12 +37,38 @@ class InsertionMethod(StrEnum):
     X11 = "x11"
     WAYLAND = "wayland"
     CLIPBOARD = "clipboard"
+    UNAVAILABLE = "unavailable"
+
+
+class OutputMode(StrEnum):
+    """Final transcript delivery policy."""
+
+    INSERT = "insert"
+    CLIPBOARD = "clipboard"
+    BOTH = "both"
 
 
 @dataclass(frozen=True, slots=True)
 class InsertionResult:
     method: InsertionMethod
     warning: str | None = None
+    inserted: bool | None = None
+    copied: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.inserted is None:
+            object.__setattr__(
+                self,
+                "inserted",
+                self.method
+                in {
+                    InsertionMethod.ATSPI,
+                    InsertionMethod.X11,
+                    InsertionMethod.WAYLAND,
+                },
+            )
+        if self.copied is None:
+            object.__setattr__(self, "copied", self.method is InsertionMethod.CLIPBOARD)
 
 
 class DirectTextBackend(Protocol):
@@ -131,7 +157,11 @@ class DesktopTextInserter:
     compatible and receive the exact input string unchanged.
     """
 
-    clipboard_warning = "Direct insertion is unavailable; the transcript was copied."
+    clipboard_notice = "Transcript copied. Paste it in the target application."
+    clipboard_failure_warning = (
+        "Direct insertion and clipboard copy are unavailable; the transcript remains in "
+        "OpenWhisper history."
+    )
 
     def __init__(
         self,
@@ -152,31 +182,90 @@ class DesktopTextInserter:
     def session(self) -> DesktopSession:
         return self._session
 
-    def insert(self, text: str) -> InsertionResult:
+    def insert(
+        self,
+        text: str,
+        output_mode: str = OutputMode.INSERT.value,
+        *,
+        allow_clipboard_fallback: bool = True,
+    ) -> InsertionResult:
+        """Deliver one complete transcript according to ``output_mode``.
+
+        ``both`` always copies the complete final text, even when direct
+        insertion succeeds. ``insert_partial`` below is deliberately separate
+        so live typing never leaves unreconciled fragments in the clipboard.
+        """
+
         if not text:
             raise ValueError("cannot insert empty text")
+        try:
+            mode = OutputMode(output_mode)
+        except ValueError as exc:
+            raise ValueError("unsupported output mode") from exc
+        if mode is OutputMode.CLIPBOARD:
+            return self._copy(text)
+
         backend, method = self._direct_backend()
         if backend is not None and self._can_insert_directly(backend, text):
             try:
                 backend.insert(text)
-                return InsertionResult(method=method)
+                direct_result = InsertionResult(method=method, inserted=True, copied=False)
+                if mode is OutputMode.BOTH:
+                    try:
+                        self._clipboard.copy(text)
+                    except Exception:
+                        return InsertionResult(
+                            method=method,
+                            warning="Transcript inserted, but clipboard copy was unavailable.",
+                            inserted=True,
+                            copied=False,
+                        )
+                    return InsertionResult(method=method, inserted=True, copied=True)
+                return direct_result
             except Exception:
                 # Focus can change or a compositor can reject automation between
                 # availability and insert. Clipboard remains the reliable path.
-                pass
+                if not allow_clipboard_fallback:
+                    raise
 
+        if not allow_clipboard_fallback:
+            raise RuntimeError("direct insertion is unavailable")
+        return self._copy(text)
+
+    def insert_partial(self, text: str) -> InsertionResult:
+        """Attempt direct insertion only; never copy a live partial chunk."""
+
+        if not text:
+            raise ValueError("cannot insert empty text")
+        backend, method = self._direct_backend()
+        if backend is None or not self._can_insert_directly(backend, text):
+            raise RuntimeError("direct insertion is unavailable")
+        backend.insert(text)
+        return InsertionResult(method=method, inserted=True, copied=False)
+
+    def copy(self, text: str) -> None:
+        if not text:
+            raise ValueError("cannot copy empty text")
         self._clipboard.copy(text)
+
+    def _copy(self, text: str) -> InsertionResult:
+        try:
+            self._clipboard.copy(text)
+        except Exception:
+            return InsertionResult(
+                method=InsertionMethod.UNAVAILABLE,
+                warning=self.clipboard_failure_warning,
+                inserted=False,
+                copied=False,
+            )
         if self._notifier is not None:
             try:
-                self._notifier.notify("Transcript copied", self.clipboard_warning)
+                self._notifier.notify("Transcript copied", self.clipboard_notice)
             except Exception:
                 # Notification failures must not make a successful clipboard
                 # copy look like a lost dictation.
                 pass
-        return InsertionResult(
-            method=InsertionMethod.CLIPBOARD,
-            warning=self.clipboard_warning,
-        )
+        return InsertionResult(method=InsertionMethod.CLIPBOARD, inserted=False, copied=True)
 
     def _can_insert_directly(self, backend: DirectTextBackend, text: str) -> bool:
         try:

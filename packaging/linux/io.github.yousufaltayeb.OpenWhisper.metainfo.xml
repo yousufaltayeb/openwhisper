@@ -10,8 +10,9 @@
   <project_license>MIT</project_license>
   <description>
     <p>
-      OpenWhisper is a privacy-first Linux dictation app with local Faster
-      Whisper transcription, Arabic-English code-switching, personal modes,
+      OpenWhisper is a privacy-first Linux dictation app with a precise Tauri
+      capture surface, a private local Python engine, Faster Whisper
+      transcription, Arabic-English code-switching, personal modes,
       vocabulary, snippets, local history, and optional BYOK providers.
     </p>
   </description>
@@ -22,6 +23,6 @@
   <url type="homepage">https://github.com/yousufaltayeb/openwhisper</url>
   <content_rating type="oars-1.1" />
   <releases>
-    <release version="0.1.0" date="2026-07-29" type="development" />
+    <release version="0.1.0" date="2026-07-30" type="development" />
   </releases>
 </component>

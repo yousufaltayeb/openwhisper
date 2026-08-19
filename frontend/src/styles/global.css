@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light dark;
+  font-family: var(--font-interface);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-block-size: 100%;
+}
+
+body {
+  margin: 0;
+  min-inline-size: 320px;
+  background: var(--surface-canvas);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--record);
+  color: var(--record-ink);
+}

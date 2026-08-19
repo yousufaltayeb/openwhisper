@@ -1,0 +1,22 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm --prefix frontend run build:e2e"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "default",
+        {
+          "identifier": "e2e-webdriver",
+          "description": "Test-only WebDriver bridge; absent from release builds",
+          "windows": ["main"],
+          "permissions": ["wdio:default", "wdio-webdriver:default"]
+        }
+      ]
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

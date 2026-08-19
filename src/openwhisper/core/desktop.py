@@ -78,6 +78,14 @@ class GlobalShortcutsPortalTransport(Protocol):
 
     def close_session(self, session_handle: str) -> None: ...
 
+    def watch_session(self, session_handle: str, callback: Callable[[], None]) -> None: ...
+
+    def unwatch_session(self, session_handle: str, callback: Callable[[], None]) -> None: ...
+
+    def watch_service(self, callback: Callable[[bool], None]) -> None: ...
+
+    def unwatch_service(self, callback: Callable[[bool], None]) -> None: ...
+
 
 class PortalGlobalShortcutBackend:
     """User-mediated XDG GlobalShortcuts portal backend.
@@ -94,10 +102,13 @@ class PortalGlobalShortcutBackend:
         transport: GlobalShortcutsPortalTransport,
         *,
         on_error: Callable[[str], None] | None = None,
+        on_status: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         self._transport = transport
         self._on_error = on_error
+        self._on_status = on_status
         self._bindings: dict[str, tuple[str, Callable[[], None], Callable[[], None] | None]] = {}
+        self._assigned_shortcuts: dict[str, str] = {}
         self._session_handle: str | None = None
         self._state = "idle"
 
@@ -108,6 +119,10 @@ class PortalGlobalShortcutBackend:
     @property
     def state(self) -> str:
         return self._state
+
+    @property
+    def assigned_shortcuts(self) -> Mapping[str, str]:
+        return dict(self._assigned_shortcuts)
 
     def register(
         self,
@@ -136,6 +151,10 @@ class PortalGlobalShortcutBackend:
         self.unregister()
         self._bindings = normalized
         self._state = "creating-session"
+        self._status("requesting-permission")
+        watch_service = getattr(self._transport, "watch_service", None)
+        if callable(watch_service):
+            watch_service(self._service_changed)
         token = f"openwhisper{uuid.uuid4().hex}"
         self._transport.request(
             "CreateSession",
@@ -151,12 +170,23 @@ class PortalGlobalShortcutBackend:
                 for _shortcut, _activate, deactivate in self._bindings.values()
             ):
                 self._transport.unsubscribe("Deactivated", self._deactivated)
+            try:
+                self._transport.unsubscribe("ShortcutsChanged", self._shortcuts_changed)
+            except Exception:
+                pass
+        unwatch_service = getattr(self._transport, "unwatch_service", None)
+        if callable(unwatch_service):
+            unwatch_service(self._service_changed)
         if self._session_handle:
+            unwatch_session = getattr(self._transport, "unwatch_session", None)
+            if callable(unwatch_session):
+                unwatch_session(self._session_handle, self._session_closed)
             try:
                 self._transport.close_session(self._session_handle)
             except Exception:
                 pass
         self._bindings.clear()
+        self._assigned_shortcuts.clear()
         self._session_handle = None
         self._state = "idle"
 
@@ -167,6 +197,9 @@ class PortalGlobalShortcutBackend:
             self._fail("Global shortcut permission was not granted by the desktop portal.")
             return
         self._session_handle = str(results["session_handle"])
+        watch_session = getattr(self._transport, "watch_session", None)
+        if callable(watch_session):
+            watch_session(self._session_handle, self._session_closed)
         self._state = "binding"
         shortcuts = tuple(
             (
@@ -193,23 +226,61 @@ class PortalGlobalShortcutBackend:
             self._bound,
         )
 
-    def _bound(self, code: int, _results: Mapping[str, object]) -> None:
+    def _bound(self, code: int, results: Mapping[str, object]) -> None:
         if self._state != "binding":
             return
         if code != 0:
             self._fail("Global shortcut binding was declined by the desktop portal.")
             return
+        # BindShortcuts may return only a subset. Always ask ListShortcuts for
+        # the compositor's authoritative, human-readable trigger descriptions.
+        self._assigned_shortcuts = self._parse_shortcuts(results.get("shortcuts"))
+        self._state = "listing"
+        assert self._session_handle is not None
+        self._transport.request(
+            "ListShortcuts",
+            (
+                self._session_handle,
+                {"handle_token": f"list{uuid.uuid4().hex}"},
+            ),
+            self._listed,
+        )
+
+    def _listed(self, code: int, results: Mapping[str, object]) -> None:
+        if self._state != "listing":
+            return
+        if code != 0:
+            self._fail("The desktop portal could not report the assigned shortcuts.")
+            return
+        listed = self._parse_shortcuts(results.get("shortcuts"))
+        if listed:
+            self._assigned_shortcuts = listed
+        if not self._assigned_shortcuts:
+            self._fail("No global shortcuts were assigned by the desktop portal.")
+            return
+        # A portal is allowed to bind a strict subset. Never dispatch an action
+        # which the compositor omitted from its response.
+        self._bindings = {
+            identifier: binding
+            for identifier, binding in self._bindings.items()
+            if identifier in self._assigned_shortcuts
+        }
         self._transport.subscribe("Activated", self._activated)
         if any(
             deactivate is not None for _shortcut, _activate, deactivate in self._bindings.values()
         ):
             self._transport.subscribe("Deactivated", self._deactivated)
+        try:
+            self._transport.subscribe("ShortcutsChanged", self._shortcuts_changed)
+        except Exception:
+            pass
         self._state = "ready"
+        self._status("ready")
 
     def _activated(self, arguments: tuple[object, ...]) -> None:
         if self._state != "ready":
             return
-        # Activated(session_handle, shortcut_id, options). Ignore signals from
+        # Activated(session_handle, shortcut_id, timestamp, options). Ignore signals from
         # another portal session or another shortcut owned by the application.
         if len(arguments) < 2:
             return
@@ -239,10 +310,66 @@ class PortalGlobalShortcutBackend:
         except Exception:
             return
 
+    def _shortcuts_changed(self, arguments: tuple[object, ...]) -> None:
+        if self._state != "ready" or len(arguments) < 2:
+            return
+        if str(arguments[0]) != self._session_handle:
+            return
+        assigned = self._parse_shortcuts(arguments[1])
+        if assigned:
+            self._assigned_shortcuts = assigned
+            self._status("ready")
+
+    def _session_closed(self) -> None:
+        if self._state == "idle":
+            return
+        # The portal already destroyed the handle; do not issue Close again.
+        self._session_handle = None
+        self._fail("The desktop portal closed the global shortcut session.")
+
+    def _service_changed(self, available: bool) -> None:
+        if available or self._state == "idle":
+            return
+        self._session_handle = None
+        self._fail("The desktop portal restarted; global shortcuts must be registered again.")
+
     def _fail(self, message: str) -> None:
         self.unregister()
+        self._status("unavailable", message=message)
         if self._on_error is not None:
             self._on_error(message)
+
+    def _status(self, state: str, *, message: str | None = None) -> None:
+        if self._on_status is None:
+            return
+        payload: dict[str, object] = {
+            "state": state,
+            "shortcuts": dict(self._assigned_shortcuts),
+        }
+        if message:
+            payload["message"] = message
+        self._on_status(payload)
+
+    def _parse_shortcuts(self, value: object) -> dict[str, str]:
+        if not isinstance(value, (list, tuple)):
+            return {}
+        parsed: dict[str, str] = {}
+        for raw_item in value:
+            item = raw_item
+            arguments = getattr(item, "arguments", None)
+            if callable(arguments):
+                item = arguments()
+            if not isinstance(item, (list, tuple)) or len(item) != 2:
+                continue
+            identifier, raw_properties = item
+            identifier = str(identifier)
+            if identifier not in self._bindings or not isinstance(raw_properties, Mapping):
+                continue
+            description = raw_properties.get("trigger_description")
+            if not isinstance(description, str) or not description.strip():
+                description = self._bindings[identifier][0]
+            parsed[identifier] = description
+        return parsed
 
 
 class QtDbusGlobalShortcutsPortalTransport:
@@ -261,7 +388,8 @@ class QtDbusGlobalShortcutsPortalTransport:
     session_interface = "org.freedesktop.portal.Session"
 
     def __init__(self) -> None:
-        self._connections: dict[tuple[str, int], tuple[str, object, str]] = {}
+        self._connections: dict[tuple[str, int], tuple[str, object, str, str]] = {}
+        self._service_watchers: dict[int, tuple[object, object]] = {}
 
     @property
     def available(self) -> bool:
@@ -339,6 +467,42 @@ class QtDbusGlobalShortcutsPortalTransport:
         except Exception:
             return
 
+    def watch_session(self, session_handle: str, callback: Callable[[], None]) -> None:
+        self._connect(
+            session_handle,
+            "Closed",
+            callback,
+            identity=callback,
+            interface=self.session_interface,
+        )
+
+    def unwatch_session(self, session_handle: str, callback: Callable[[], None]) -> None:
+        self._disconnect(session_handle, callback)
+
+    def watch_service(self, callback: Callable[[bool], None]) -> None:
+        try:
+            from PySide6.QtCore import QObject, Slot
+            from PySide6.QtDBus import QDBusConnection, QDBusServiceWatcher
+
+            class Receiver(QObject):
+                @Slot(str, str, str)
+                def changed(self, _name: str, _old_owner: str, new_owner: str) -> None:
+                    callback(bool(new_owner))
+
+            receiver = Receiver()
+            watcher = QDBusServiceWatcher(
+                self.service,
+                QDBusConnection.sessionBus(),
+                QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange,
+            )
+            watcher.serviceOwnerChanged.connect(receiver.changed)
+            self._service_watchers[id(callback)] = (watcher, receiver)
+        except Exception:
+            return
+
+    def unwatch_service(self, callback: Callable[[bool], None]) -> None:
+        self._service_watchers.pop(id(callback), None)
+
     def _connect(
         self,
         path: str,
@@ -346,12 +510,15 @@ class QtDbusGlobalShortcutsPortalTransport:
         callback: Callable[..., None],
         *,
         identity: object | None = None,
+        interface: str | None = None,
     ) -> None:
         from PySide6.QtCore import SLOT, QObject, Slot
         from PySide6.QtDBus import QDBusConnection
 
         bus = QDBusConnection.sessionBus()
-        interface = self.request_interface if path != self.object_path else self.interface
+        interface = interface or (
+            self.request_interface if path != self.object_path else self.interface
+        )
 
         if signal == "Response":
 
@@ -365,47 +532,71 @@ class QtDbusGlobalShortcutsPortalTransport:
         elif signal == "Activated":
 
             class Receiver(QObject):
-                @Slot("QDBusObjectPath", str, "QVariantMap")
+                @Slot("QDBusObjectPath", str, "qulonglong", "QVariantMap")
                 def on_activated(
                     self,
                     session_handle: object,
                     shortcut_id: str,
+                    timestamp: int,
                     options: Mapping[str, object],
                 ) -> None:
-                    callback(session_handle, shortcut_id, options)
+                    callback(session_handle, shortcut_id, timestamp, options)
 
             receiver = Receiver()
-            slot = SLOT("on_activated(QDBusObjectPath,QString,QVariantMap)")
+            slot = SLOT("on_activated(QDBusObjectPath,QString,qulonglong,QVariantMap)")
         elif signal == "Deactivated":
 
             class Receiver(QObject):
-                @Slot("QDBusObjectPath", str, "QVariantMap")
+                @Slot("QDBusObjectPath", str, "qulonglong", "QVariantMap")
                 def on_deactivated(
                     self,
                     session_handle: object,
                     shortcut_id: str,
+                    timestamp: int,
                     options: Mapping[str, object],
                 ) -> None:
-                    callback(session_handle, shortcut_id, options)
+                    callback(session_handle, shortcut_id, timestamp, options)
 
             receiver = Receiver()
-            slot = SLOT("on_deactivated(QDBusObjectPath,QString,QVariantMap)")
+            slot = SLOT("on_deactivated(QDBusObjectPath,QString,qulonglong,QVariantMap)")
+        elif signal == "ShortcutsChanged":
+
+            class Receiver(QObject):
+                @Slot("QDBusObjectPath", "QVariantList")
+                def on_shortcuts_changed(self, session_handle: object, shortcuts: object) -> None:
+                    callback(session_handle, shortcuts)
+
+            receiver = Receiver()
+            slot = SLOT("on_shortcuts_changed(QDBusObjectPath,QVariantList)")
+        elif signal == "Closed":
+
+            class Receiver(QObject):
+                @Slot()
+                def on_closed(self) -> None:
+                    callback()
+
+            receiver = Receiver()
+            slot = SLOT("on_closed()")
         else:
             raise ValueError(f"unsupported portal signal: {signal}")
         if not bus.connect(self.service, path, interface, signal, receiver, slot):
             raise RuntimeError(f"could not subscribe to portal {signal}")
-        self._connections[(path, id(identity or callback))] = (signal, receiver, slot)
+        self._connections[(path, id(identity or callback))] = (
+            signal,
+            receiver,
+            slot,
+            interface,
+        )
 
     def _disconnect(self, path: str, callback: object) -> None:
         entry = self._connections.pop((path, id(callback)), None)
         if entry is None:
             return
-        signal, receiver, slot = entry
+        signal, receiver, slot, interface = entry
         try:
             from PySide6.QtCore import SLOT
             from PySide6.QtDBus import QDBusConnection
 
-            interface = self.request_interface if path != self.object_path else self.interface
             del SLOT
             QDBusConnection.sessionBus().disconnect(
                 self.service, path, interface, signal, receiver, slot
@@ -491,7 +682,11 @@ class DesktopIntegration(Protocol):
         cloud: bool = False,
     ) -> DictationContext: ...
 
-    def insert(self, text: str) -> InsertionResult: ...
+    def insert(self, text: str, output_mode: str = "insert") -> InsertionResult: ...
+
+    def insert_partial(self, text: str) -> InsertionResult: ...
+
+    def copy(self, text: str) -> None: ...
 
     def replace_selection(self, text: str) -> bool: ...
 
@@ -767,7 +962,34 @@ class CapabilityDesktopIntegration:
             recent_clipboard=clipboard,
         )
 
-    def insert(self, text: str) -> InsertionResult:
+    def insert(self, text: str, output_mode: str = "insert") -> InsertionResult:
+        target = self.focused_target()
+        if output_mode == "clipboard":
+            return self.inserter.insert(text, output_mode)
+        if target is not None and target.protected:
+            raise PermissionError("OpenWhisper never inserts into protected/password fields")
+        if (
+            target is not None
+            and target.editable
+            and self.accessibility is not None
+            and self.accessibility.replace_selection(text)
+        ):
+            result = InsertionResult(InsertionMethod.ATSPI, inserted=True, copied=False)
+            if output_mode == "both":
+                try:
+                    self.copy(text)
+                except Exception:
+                    return InsertionResult(
+                        InsertionMethod.ATSPI,
+                        warning="Transcript inserted, but clipboard copy was unavailable.",
+                        inserted=True,
+                        copied=False,
+                    )
+                return InsertionResult(InsertionMethod.ATSPI, inserted=True, copied=True)
+            return result
+        return self.inserter.insert(text, output_mode)
+
+    def insert_partial(self, text: str) -> InsertionResult:
         target = self.focused_target()
         if target is not None and target.protected:
             raise PermissionError("OpenWhisper never inserts into protected/password fields")
@@ -777,8 +999,11 @@ class CapabilityDesktopIntegration:
             and self.accessibility is not None
             and self.accessibility.replace_selection(text)
         ):
-            return InsertionResult(InsertionMethod.ATSPI)
-        return self.inserter.insert(text)
+            return InsertionResult(InsertionMethod.ATSPI, inserted=True, copied=False)
+        return self.inserter.insert_partial(text)
+
+    def copy(self, text: str) -> None:
+        self.inserter.copy(text)
 
     def replace_selection(self, text: str) -> bool:
         target = self.focused_target()

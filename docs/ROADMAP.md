@@ -5,8 +5,10 @@ work is complete only when the corresponding release checklist passes.
 
 ## v0.1 — private Linux dictation
 
-- [ ] PySide6 tray app with recording overlay, settings, provider setup, and
-  searchable local transcript history.
+- [ ] Pass the React/Tauri hybrid spike—engine IPC, Capture, tray, shortcuts,
+  microphone, insertion, and retained PySide overlay—on GNOME and KDE Wayland.
+- [ ] Port Library, Personalize, System, onboarding, and the command drawer only
+  after that spike passes; keep the Qt main window as a development parity shell.
 - [ ] Toggle and push-to-talk shortcuts.
 - [ ] Faster Whisper local transcription as the default path, with on-demand
   model downloads and CPU/CUDA selection.

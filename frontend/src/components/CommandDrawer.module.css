@@ -1,0 +1,120 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-block-start: min(16vh, 140px);
+  background: rgb(8 9 9 / 58%);
+}
+
+.modal {
+  inline-size: min(620px, calc(100vw - 28px));
+  max-block-size: calc(100vh - 48px);
+  overflow: auto;
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-raised);
+}
+
+.dialog {
+  padding: 22px;
+  color: var(--text-primary);
+  background: var(--surface-face);
+  border: 1px solid var(--seam);
+  border-radius: inherit;
+  outline: none;
+}
+
+.headingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.headingRow h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 570;
+}
+
+.dialog > p {
+  max-inline-size: 54ch;
+  margin: 6px 0 22px;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+}
+
+.closeButton {
+  display: grid;
+  place-items: center;
+  inline-size: 44px;
+  block-size: 44px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--seam);
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.closeButton[data-hovered] {
+  color: var(--text-primary);
+  background: var(--surface-face-secondary);
+}
+
+.commandList {
+  border-block-start: 1px solid var(--seam);
+}
+
+.command {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  inline-size: 100%;
+  min-block-size: 56px;
+  padding-inline: 10px;
+  color: var(--text-primary);
+  background: transparent;
+  border: 0;
+  border-block-end: 1px solid var(--seam);
+  cursor: pointer;
+  text-align: start;
+}
+
+.command kbd {
+  color: var(--text-secondary);
+  font-family: var(--font-technical);
+  font-size: 0.7rem;
+}
+
+.actionType {
+  color: var(--text-secondary);
+  font-family: var(--font-technical);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.command[data-hovered] {
+  color: var(--record);
+  background: var(--surface-face-secondary);
+}
+
+.command[data-disabled] {
+  color: var(--text-secondary);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+@media (max-width: 560px) {
+  .overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    inline-size: 100%;
+    border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+  }
+}

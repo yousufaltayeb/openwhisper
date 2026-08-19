@@ -108,10 +108,7 @@ def test_session_uses_raw_text_if_cleanup_fails_and_cleans_audio(tmp_path: Path)
 
     assert outcome.state is SessionState.COMPLETED
     assert outcome.raw_text == outcome.final_text == "مرحبا بالعالم again"
-    assert outcome.warnings == (
-        "Cleanup failed; the raw transcript was used.",
-        "Direct insertion is unavailable; the transcript was copied.",
-    )
+    assert outcome.warnings == ("Cleanup failed; the raw transcript was used.",)
     assert history.records[0].cleanup_provider == "cloud-cleanup"
     assert history.records[0].duration_seconds == 4.0
     assert clipboard.value == outcome.final_text
@@ -123,6 +120,31 @@ def test_session_uses_raw_text_if_cleanup_fails_and_cleans_audio(tmp_path: Path)
         SessionState.INSERTING,
         SessionState.COMPLETED,
     ]
+
+
+def test_session_supports_stopping_capture_before_provider_processing(tmp_path: Path) -> None:
+    temporary_audio = TempAudioManager(tmp_path / "audio")
+    path = temporary_audio.create_path()
+    capture = Capture(path)
+    session = DictationSession(
+        audio_capture=capture,
+        temporary_audio=temporary_audio,
+        transcription_provider=Provider(Transcript("ready", "en", "test", 1)),
+        text_inserter=DesktopTextInserter(
+            session=DesktopSession.UNKNOWN,
+            clipboard=Clipboard(),
+        ),
+        history=MemoryHistory([]),
+    )
+
+    session.start_recording()
+    captured = session.stop_capture()
+
+    assert session.state is SessionState.PROCESSING
+    assert path.exists()
+    outcome = session.process_captured(captured)
+    assert outcome.state is SessionState.COMPLETED
+    assert not path.exists()
 
 
 def test_session_cancellation_during_transcription_suppresses_history_and_insert(

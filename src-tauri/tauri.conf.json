@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenWhisper",
+  "version": "0.1.0",
+  "identifier": "io.github.yousufaltayeb.OpenWhisper",
+  "build": {
+    "beforeDevCommand": "npm --prefix frontend run dev",
+    "beforeBuildCommand": "npm --prefix frontend run build",
+    "devUrl": "http://127.0.0.1:1420",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenWhisper",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 780,
+        "minHeight": 600,
+        "visible": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm"],
+    "icon": ["icons/icon.png"],
+    "category": "Utility",
+    "shortDescription": "Private dictation for Linux",
+    "longDescription": "OpenWhisper is a privacy-first Linux dictation instrument."
+  }
+}

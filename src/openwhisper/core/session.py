@@ -49,6 +49,8 @@ class SessionOutcome:
     final_text: str = ""
     transcript: Transcript | None = None
     insertion: InsertionResult | None = None
+    inserted: bool = False
+    copied: bool = False
     history_record: HistoryRecord | None = None
     warnings: tuple[str, ...] = ()
 
@@ -77,6 +79,7 @@ class DictationSession:
         cleanup_provider: CleanupProvider | None = None,
         custom_cleanup_prompt: str | None = None,
         mode_id: str = "raw",
+        output_mode: str = "insert",
         final_text_processor: Callable[[str], str] | None = None,
         audio_retention: RetainedAudioManager | None = None,
         cancellation_event: threading.Event | None = None,
@@ -94,6 +97,9 @@ class DictationSession:
         self.cleanup_provider = cleanup_provider
         self.custom_cleanup_prompt = custom_cleanup_prompt
         self.mode_id = mode_id
+        if output_mode not in {"insert", "clipboard", "both"}:
+            raise ValueError("unsupported output mode")
+        self.output_mode = output_mode
         self.final_text_processor = final_text_processor
         self.audio_retention = audio_retention
         self._cancellation_event = cancellation_event or threading.Event()
@@ -143,18 +149,46 @@ class DictationSession:
     def stop_and_process(self) -> SessionOutcome:
         """Stop the recorder and complete a single dictation transaction."""
 
+        return self.process_captured(self.stop_capture())
+
+    def stop_capture(self) -> CapturedAudio:
+        """Stop capture before provider work, on the recorder's owning thread."""
+
         with self._lock:
             if self._state is not SessionState.RECORDING:
                 raise SessionBusyError("session is not recording")
             self._state = SessionState.PROCESSING
         self._notify_state(SessionState.PROCESSING)
 
-        captured: CapturedAudio | None = None
+        try:
+            return self.audio_capture.stop()
+        except Exception:
+            if self._is_cancelled():
+                self._set_state(SessionState.CANCELLED)
+            else:
+                self._set_state(SessionState.FAILED)
+            raise
+
+    def process_captured(self, captured: CapturedAudio) -> SessionOutcome:
+        """Complete provider, storage, and insertion work for stopped audio."""
+
+        adopted = False
+        with self._lock:
+            if self._state is SessionState.IDLE:
+                # A host-level provider retry can reuse already captured audio
+                # without reopening the microphone. Ordinary callers still
+                # transition through stop_capture first.
+                self._state = SessionState.PROCESSING
+                adopted = True
+            if self._state is not SessionState.PROCESSING:
+                raise SessionBusyError("session is not processing captured audio")
+        if adopted:
+            self._notify_state(SessionState.PROCESSING)
+
         retained_audio: RetainedAudio | None = None
         history_record: HistoryRecord | None = None
         processing_started = time.perf_counter()
         try:
-            captured = self.audio_capture.stop()
             if self._is_cancelled():
                 return self._cancelled_outcome()
 
@@ -222,7 +256,7 @@ class DictationSession:
                 return self._cancelled_outcome(
                     raw_text=raw_text, final_text=final_text, transcript=transcript
                 )
-            insertion = self.text_inserter.insert(final_text)
+            insertion = self._insert_final_text(final_text)
             self._save_insertion_method(history_record, insertion)
             if insertion.warning:
                 warnings.append(insertion.warning)
@@ -233,6 +267,8 @@ class DictationSession:
                 final_text=final_text,
                 transcript=transcript,
                 insertion=insertion,
+                inserted=bool(insertion.inserted),
+                copied=bool(insertion.copied),
                 history_record=history_record,
                 warnings=tuple(warnings),
             )
@@ -242,8 +278,7 @@ class DictationSession:
             self._set_state(SessionState.FAILED)
             raise
         finally:
-            if captured is not None:
-                self.temporary_audio.delete(captured.path)
+            self.temporary_audio.delete(captured.path)
 
     def cancel(self) -> None:
         """Cancel recording now, or suppress remaining work in a worker call."""
@@ -317,12 +352,35 @@ class DictationSession:
     ) -> None:
         if record is None or record.id is None:
             return
+        update_delivery = getattr(self.history, "update_delivery", None)
+        if callable(update_delivery):
+            try:
+                update_delivery(
+                    record.id,
+                    inserted=bool(insertion.inserted),
+                    copied=bool(insertion.copied),
+                    insertion_method=insertion.method.value,
+                )
+                return
+            except Exception:
+                pass
         update = getattr(self.history, "update_insertion_method", None)
         if callable(update):
             try:
                 update(record.id, insertion.method.value)
             except Exception:
                 pass
+
+    def _insert_final_text(self, text: str) -> InsertionResult:
+        """Call newer delivery-aware inserters while retaining old adapters."""
+
+        insert = getattr(self.text_inserter, "insert")
+        try:
+            return insert(text, self.output_mode)
+        except TypeError:
+            # Provider/core test doubles from before output modes accepted only
+            # the transcript argument. They retain the historical insert path.
+            return insert(text)
 
     @staticmethod
     def _raw_text(transcript: Transcript) -> str:

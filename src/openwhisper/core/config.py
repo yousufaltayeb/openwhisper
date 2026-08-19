@@ -9,6 +9,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+COMPUTE_SELECTIONS = frozenset({"auto", "cpu", "nvidia", "amd"})
+OUTPUT_MODES = frozenset({"insert", "clipboard", "both"})
+
 
 @dataclass(frozen=True, slots=True)
 class AppPaths:
@@ -71,6 +74,12 @@ class AppPaths:
         return self.cache_dir / "audio"
 
     @property
+    def model_cache_dir(self) -> Path:
+        """Engine-owned resumable Faster-Whisper model storage."""
+
+        return self.cache_dir / "models"
+
+    @property
     def retained_audio_dir(self) -> Path:
         return self.data_dir / "retained-audio"
 
@@ -101,6 +110,7 @@ class AppConfig:
     transcription_model: str = "large-v3-turbo"
     device: str = "auto"
     compute_type: str = "auto"
+    output_mode: str = "insert"
     language: str = "auto"
     cleanup_mode: str = "raw"
     cleanup_provider: str | None = None
@@ -111,12 +121,25 @@ class AppConfig:
     history_retention_days: int = 30
     live_insertion: bool = False
     active_mode_id: str = "raw"
+    # Missing values belong to upgraded profiles, which should not be forced
+    # through onboarding. RuntimeController stores False for a new profile.
+    onboarding_completed: bool = True
+    theme: str = "system"
     reduced_motion: bool = False
     retain_audio: bool = False
     audio_retention_days: int = 7
     audio_device_id: str | None = None
 
     def __post_init__(self) -> None:
+        # ``cuda`` was the public spelling before vendor-specific choices were
+        # introduced. Normalize it at construction so every caller observes
+        # the stable persisted value while old INI files remain readable.
+        if self.device == "cuda":
+            object.__setattr__(self, "device", "nvidia")
+        if self.device not in COMPUTE_SELECTIONS:
+            raise ValueError("unsupported compute selection")
+        if self.output_mode not in OUTPUT_MODES:
+            raise ValueError("unsupported output mode")
         if self.history_retention_days < 0:
             raise ValueError("history_retention_days cannot be negative")
         if not 1 <= self.audio_retention_days <= 30:
@@ -129,6 +152,8 @@ class AppConfig:
             raise ValueError("shortcut cannot be empty")
         if not self.active_mode_id.strip():
             raise ValueError("active_mode_id cannot be empty")
+        if self.theme not in {"system", "light", "dark"}:
+            raise ValueError("unsupported theme")
 
 
 class ConfigStore:
@@ -200,6 +225,14 @@ class ConfigStore:
                 ("transcription.faster_whisper", "compute_type"),
                 default=defaults.compute_type,
             ),
+            output_mode=_get_choice(
+                parser,
+                ("general", "output_mode"),
+                ("output", "mode"),
+                ("dictation", "output_mode"),
+                default=defaults.output_mode,
+                choices=set(OUTPUT_MODES),
+            ),
             language=_get_text(
                 parser,
                 ("transcription", "language"),
@@ -239,6 +272,17 @@ class ConfigStore:
                 parser,
                 ("modes", "active"),
                 default=defaults.active_mode_id,
+            ),
+            onboarding_completed=_get_bool(
+                parser,
+                ("general", "onboarding_completed"),
+                default=defaults.onboarding_completed,
+            ),
+            theme=_get_choice(
+                parser,
+                ("appearance", "theme"),
+                default=defaults.theme,
+                choices={"system", "light", "dark"},
             ),
             reduced_motion=_get_bool(
                 parser,
@@ -325,6 +369,8 @@ def _parser_for(config: AppConfig) -> configparser.ConfigParser:
         "notifications": str(config.notifications).lower(),
         "live_insertion": str(config.live_insertion).lower(),
         "reduced_motion": str(config.reduced_motion).lower(),
+        "onboarding_completed": str(config.onboarding_completed).lower(),
+        "output_mode": config.output_mode,
     }
     parser["transcription"] = {
         "provider": config.transcription_provider,
@@ -344,6 +390,7 @@ def _parser_for(config: AppConfig) -> configparser.ConfigParser:
     }
     parser["history"] = {"retention_days": str(config.history_retention_days)}
     parser["modes"] = {"active": config.active_mode_id}
+    parser["appearance"] = {"theme": config.theme}
     parser["audio"] = {
         "retain": str(config.retain_audio).lower(),
         "retention_days": str(config.audio_retention_days),

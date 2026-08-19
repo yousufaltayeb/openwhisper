@@ -10,6 +10,7 @@ import pytest
 
 from openwhisper.core.audio import (
     AudioCaptureConfig,
+    AudioDeviceError,
     BufferedParecAudioCapture,
     ParecAudioCapture,
     QtMultimediaAudioCapture,
@@ -43,6 +44,23 @@ class RawAudioProcess(FakeProcess):
     def __init__(self, pcm: bytes) -> None:
         super().__init__()
         self.stdout = BytesIO(pcm)
+
+
+class FakeQtStream:
+    def bytesAvailable(self) -> int:
+        return 0
+
+
+class FakeQtAudioSource:
+    def __init__(self, *, error: object = 0) -> None:
+        self._error = error
+        self.stopped = 0
+
+    def stop(self) -> None:
+        self.stopped += 1
+
+    def error(self) -> object:
+        return self._error
 
 
 def test_temp_manager_only_deletes_its_direct_children(tmp_path: Path) -> None:
@@ -193,6 +211,41 @@ def test_qt_capture_silence_trim_preserves_only_non_quiet_pcm() -> None:
     pcm = b"\x00\x00\x03\x00\x06\x00\x00\x00"
 
     assert QtMultimediaAudioCapture._trim_silence(pcm, config) == b"\x06\x00"
+
+
+def test_qt_capture_rejects_an_empty_backend_before_model_work(tmp_path: Path) -> None:
+    manager = TempAudioManager(tmp_path / "audio")
+    capture = QtMultimediaAudioCapture(manager)
+    source = FakeQtAudioSource()
+    capture._source = source
+    capture._stream = FakeQtStream()
+    capture._config = AudioCaptureConfig()
+
+    with pytest.raises(AudioDeviceError, match="no microphone audio"):
+        capture.stop()
+
+    assert source.stopped == 1
+    assert not capture.is_recording
+    assert not manager.directory.exists()
+
+
+def test_qt_capture_surfaces_backend_failure_for_silent_pcm(tmp_path: Path) -> None:
+    class OpenError:
+        name = "OpenError"
+        value = 1
+
+    manager = TempAudioManager(tmp_path / "audio")
+    capture = QtMultimediaAudioCapture(manager)
+    capture._source = FakeQtAudioSource(error=OpenError())
+    capture._stream = FakeQtStream()
+    capture._config = AudioCaptureConfig()
+    capture._pcm.extend(b"\x00\x00" * 160)
+
+    with pytest.raises(AudioDeviceError, match="PipeWire or PulseAudio"):
+        capture.stop()
+
+    assert not capture.is_recording
+    assert not manager.directory.exists()
 
 
 def test_capture_config_rejects_unsupported_pcm_width() -> None:

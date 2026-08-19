@@ -1,0 +1,62 @@
+{
+  "name": "openwhisper-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.x",
+    "npm": ">=11 <12"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "build:e2e": "tsc -b && vite build --mode e2e",
+    "e2e": "wdio run e2e/wdio.conf.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "tauri": "tauri",
+    "tauri:dev": "cd ../src-tauri && ../frontend/node_modules/.bin/tauri dev",
+    "tauri:build": "cd ../src-tauri && ../frontend/node_modules/.bin/tauri build"
+  },
+  "dependencies": {
+    "@fontsource-variable/readex-pro": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@tauri-apps/api": "2.11.1",
+    "lucide-react": "1.28.0",
+    "react": "19.2.8",
+    "react-aria-components": "1.19.0",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@axe-core/webdriverio": "4.12.1",
+    "@tauri-apps/cli": "2.11.4",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.5",
+    "@wdio/cli": "9.30.0",
+    "@wdio/globals": "9.29.1",
+    "@wdio/local-runner": "9.30.0",
+    "@wdio/mocha-framework": "9.30.0",
+    "@wdio/spec-reporter": "9.29.1",
+    "@wdio/tauri-plugin": "1.2.0",
+    "@wdio/tauri-service": "1.2.0",
+    "jsdom": "30.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  },
+  "overrides": {
+    "archiver-utils": "5.0.2",
+    "brace-expansion": "5.0.9",
+    "ejs": "6.0.1",
+    "filelist": "2.0.2",
+    "minimatch": "10.2.6",
+    "@wdio/native-utils": "2.5.0",
+    "readdir-glob": "3.0.0",
+    "serialize-javascript": "7.0.7",
+    "zip-stream": "7.0.5"
+  }
+}

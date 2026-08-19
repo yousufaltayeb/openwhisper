@@ -40,6 +40,13 @@ Thumbs.db
 .coverage
 htmlcov/
 
+# Frontend and Rust build output
+/frontend/node_modules/
+/frontend/dist/
+/src-tauri/gen/
+/src-tauri/target/
+/.tmp-*/
+
 # Whisper models (downloaded automatically)
 *.bin
 
@@ -60,6 +67,16 @@ htmlcov/
 /packaging/flatpak/wheels/*
 !/packaging/flatpak/wheels/.gitkeep
 /packaging/flatpak/requirements-*.lock
+/.flatpak-builder/
 /build-dir/
 /unsigned-repo/
 /pages/
+
+# Impeccable project tooling is committed; local consent, logs, and live state are not.
+/.impeccable/consent.json
+/.impeccable/logs/
+/.impeccable/live/*
+!/.impeccable/live/config.json
+/frontend/.impeccable/live/*
+!/frontend/.impeccable/live/config.json
+/.agents/.impeccable-hook.log

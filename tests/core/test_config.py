@@ -36,7 +36,7 @@ notifications = false
     config = store.load(migrate_legacy=False)
     assert config == AppConfig(
         transcription_model="medium",
-        device="cuda",
+        device="nvidia",
         compute_type="float16",
         language="ar",
         shortcut="<ctrl>+space",
@@ -125,9 +125,21 @@ def test_audio_retention_and_active_mode_round_trip_with_bounds(tmp_path: Path) 
         retain_audio=True,
         audio_retention_days=14,
         audio_device_id="opaque-qt-device-id",
+        onboarding_completed=False,
+        theme="dark",
     )
     store.save(expected)
     assert store.load(migrate_legacy=False) == expected
 
     paths.config_file.write_text("[audio]\nretain = true\nretention_days = 31\n", encoding="utf-8")
     assert store.load(migrate_legacy=False).audio_retention_days == 7
+
+
+def test_theme_defaults_to_system_and_recovers_invalid_values(tmp_path: Path) -> None:
+    paths = AppPaths.for_home(tmp_path)
+    store = ConfigStore(paths)
+    assert store.load(migrate_legacy=False).theme == "system"
+
+    paths.config_dir.mkdir(parents=True)
+    paths.config_file.write_text("[appearance]\ntheme = neon\n", encoding="utf-8")
+    assert store.load(migrate_legacy=False).theme == "system"

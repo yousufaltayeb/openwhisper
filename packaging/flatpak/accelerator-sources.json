@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "description": "Release-prepared accelerator inputs; CPU builds must not consume this file.",
+  "nvidia": {
+    "cudaMajor": 12,
+    "cublas": {
+      "version": "12.6.4.1",
+      "sha256": "08ed2686e9875d01b58e3cb379c6896df8e76c75e0d4a7f7dace3d7b6d9ef8eb"
+    },
+    "cudnn": {
+      "version": "9.5.1.17",
+      "sha256": "30ac3869f6db17d170e0e556dd6cc5eee02647abc31ca856634d5a40f82c15b2"
+    },
+    "cudaRuntime": {
+      "version": "12.6.77",
+      "sha256": "ba3b56a4f896141e25e19ab287cd71e52a6a0f4b29d0d31609f60e3b4d5219b7"
+    },
+    "nvrtc": {
+      "version": "12.6.77",
+      "sha256": "35b0cc6ee3a9636d5409133e79273ce1f3fd087abb0532d2d2e8fff1fe9efc53"
+    }
+  },
+  "amd": {
+    "rocm": "6.2.4",
+    "ctranslate2": {
+      "version": "4.8.1",
+      "commit": "0d8bcd362ac75ef860ef161d6f0efad0ae439ff0"
+    },
+    "pybind11": {
+      "version": "2.13.6",
+      "sha256": "ba6af10348c12b24e92fa086b39cfba0eff619b61ac77c406167d813b096d39a"
+    },
+    "rocmCoreCommit": "98a50c572a3a1884c223e28cabb00e400a72ac84",
+    "hipCommit": "d3b75fbb82113374e2d6103baa96a9c61425da48",
+    "rocblasCommit": "3171316ae7f642952fccbffc2ae0368bf67394f5",
+    "hipblasCommit": "f4095274efb0892a1ef3ce0435352849f721d393",
+    "miopenCommit": "ba89256497cc8e98eff8fa957116d0ca7611aec5"
+  }
+}
