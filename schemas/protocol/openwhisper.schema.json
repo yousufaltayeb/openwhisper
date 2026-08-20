@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://openwhisper.dev/schema/protocol/openwhisper-v2.json",
+  "$id": "https://openwhisper.dev/schema/protocol/openwhisper-v3.json",
   "title": "OpenWhisper private IPC protocol",
   "description": "Canonical schema. Frames are 4-byte big-endian length-prefixed UTF-8 JSON and are limited to 8 MiB.",
   "oneOf": [
@@ -9,6 +9,75 @@
   ],
   "$defs": {
     "jsonValue": true,
+    "language": { "enum": ["auto", "ar", "en"] },
+    "mode": { "enum": ["raw", "clean", "code"] },
+    "source": { "enum": ["microphone", "file", "stdin"] },
+    "readinessBlocker": {
+      "type": "object", "additionalProperties": false,
+      "required": ["capability", "code", "detail", "action"],
+      "properties": {
+        "capability": { "type": "string" }, "code": { "type": "string" },
+        "detail": { "type": "string" }, "action": { "type": "string" }
+      }
+    },
+    "captureState": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["phase"], "properties": { "phase": { "const": "idle" } } },
+        { "type": "object", "additionalProperties": true, "required": ["phase", "session_id", "generation", "mode"], "properties": { "phase": { "enum": ["capturing", "transcribing", "processing", "delivering"] }, "session_id": { "type": "string", "format": "uuid" }, "generation": { "type": "integer", "minimum": 1 }, "mode": { "$ref": "#/$defs/mode" } } },
+        { "type": "object", "additionalProperties": false, "required": ["phase", "generation", "message"], "properties": { "phase": { "const": "failed" }, "session_id": { "type": ["string", "null"], "format": "uuid" }, "generation": { "type": "integer", "minimum": 0 }, "message": { "type": "string" } } }
+      ]
+    },
+    "systemStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["daemon", "version", "protocol", "capture", "capture_available", "blockers", "mode", "language", "local_only"],
+      "properties": {
+        "daemon": { "type": "string" }, "version": { "type": "string" }, "protocol": { "type": "integer" },
+        "capture": { "$ref": "#/$defs/captureState" }, "capture_available": { "type": "boolean" },
+        "blockers": { "type": "array", "items": { "$ref": "#/$defs/readinessBlocker" } },
+        "mode": { "$ref": "#/$defs/mode" }, "language": { "$ref": "#/$defs/language" }, "local_only": { "type": "boolean" },
+        "audio_backend": { "type": "string" }, "model": { "type": "string" },
+        "model_installing": { "type": "boolean" }
+      }
+    },
+    "modelInfo": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "model_id", "installed", "selected", "installing", "trust", "benchmark_status", "source", "license", "size_bytes", "sha256", "worker_abi"],
+      "properties": {
+        "name": { "type": "string" }, "model_id": { "type": "string" },
+        "installed": { "type": "boolean" }, "selected": { "type": "boolean" }, "installing": { "type": "boolean" },
+        "trust": { "const": "builtin_pinned" }, "benchmark_status": { "const": "not_run" },
+        "source": { "type": "string", "format": "uri" }, "license": { "type": "string" },
+        "size_bytes": { "type": "integer", "minimum": 1 }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "worker_abi": { "type": "string" }, "path": { "type": "string" }
+      }
+    },
+    "modelDownloadProgress": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "downloaded_bytes", "total_bytes"],
+      "properties": {
+        "name": { "type": "string" }, "downloaded_bytes": { "type": "integer", "minimum": 0 },
+        "total_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "transcriptionResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session_id", "generation", "raw_text", "final_text", "language", "mode", "duration_ms", "source", "history_id", "inserted", "copied", "insertion_method", "warnings"],
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" }, "generation": { "type": "integer", "minimum": 1 },
+        "raw_text": { "type": "string" }, "final_text": { "type": "string" }, "language": { "$ref": "#/$defs/language" }, "mode": { "$ref": "#/$defs/mode" },
+        "duration_ms": { "type": "integer", "minimum": 0 }, "source": { "$ref": "#/$defs/source" },
+        "history_id": { "type": ["string", "null"], "format": "uuid" }, "inserted": { "const": false }, "copied": { "type": "boolean" },
+        "insertion_method": { "const": "clipboard" }, "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "methodParams": {
+      "type": "object",
+      "description": "Per-method parameters are validated by the daemon; unknown fields are rejected.",
+      "properties": {
+        "mode": { "$ref": "#/$defs/mode" }, "language": { "$ref": "#/$defs/language" },
+        "wait": { "type": "boolean" }, "copy": { "type": "boolean" }, "path": { "type": "string" }
+      }
+    },
     "capability": {
       "type": "object",
       "additionalProperties": false,
@@ -56,7 +125,7 @@
         {
           "type": "object", "additionalProperties": false,
           "required": ["type", "protocol_version", "client", "client_version"],
-          "properties": { "type": { "const": "handshake" }, "protocol_version": { "type": "integer", "minimum": 1, "maximum": 2 }, "client": { "type": "string" }, "client_version": { "type": "string" } }
+          "properties": { "type": { "const": "handshake" }, "protocol_version": { "type": "integer", "minimum": 2, "maximum": 3 }, "client": { "type": "string" }, "client_version": { "type": "string" } }
         },
         {
           "type": "object", "additionalProperties": false,

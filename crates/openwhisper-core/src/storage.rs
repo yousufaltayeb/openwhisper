@@ -9,7 +9,18 @@ use uuid::Uuid;
 
 use crate::state::Mode;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledModel {
+    pub name: String,
+    pub model_id: String,
+    pub path: String,
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub worker_abi: String,
+    pub installed_at: DateTime<Utc>,
+}
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -71,6 +82,11 @@ impl StateStore {
     fn initialize(connection: Connection) -> Result<Self, StorageError> {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
+        let existing_version: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if existing_version > SCHEMA_VERSION {
+            return Err(StorageError::Database(rusqlite::Error::InvalidQuery));
+        }
         connection.execute_batch(
             "BEGIN;
              CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -103,9 +119,24 @@ impl StateStore {
                  body TEXT NOT NULL,
                  added_at TEXT NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS installed_models (
+                 name TEXT PRIMARY KEY,
+                 model_id TEXT NOT NULL,
+                 path TEXT NOT NULL,
+                 sha256 TEXT NOT NULL,
+                 size_bytes INTEGER NOT NULL,
+                 worker_abi TEXT NOT NULL,
+                 installed_at TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS trusted_catalog (
+                 singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                 highest_sequence INTEGER NOT NULL
+             );
              INSERT OR IGNORE INTO schema_migrations(version, applied_at)
                  VALUES (1, datetime('now'));
-             PRAGMA user_version = 1;
+             INSERT OR IGNORE INTO schema_migrations(version, applied_at)
+                 VALUES (2, datetime('now'));
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
@@ -269,6 +300,122 @@ impl StateStore {
         let sql = format!("DELETE FROM {table} WHERE {column} = ?1");
         Ok(self.connection()?.execute(&sql, [key])? > 0)
     }
+
+    pub fn put_installed_model(&self, model: &InstalledModel) -> Result<(), StorageError> {
+        self.connection()?.execute(
+            "INSERT OR REPLACE INTO installed_models
+             (name, model_id, path, sha256, size_bytes, worker_abi, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                model.name,
+                model.model_id,
+                model.path,
+                model.sha256,
+                model.size_bytes,
+                model.worker_abi,
+                model.installed_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn installed_model(&self, name: &str) -> Result<Option<InstalledModel>, StorageError> {
+        self.connection()?
+            .query_row(
+                "SELECT name, model_id, path, sha256, size_bytes, worker_abi, installed_at
+                 FROM installed_models WHERE name = ?1",
+                [name],
+                |row| {
+                    let installed_at: String = row.get(6)?;
+                    Ok(InstalledModel {
+                        name: row.get(0)?,
+                        model_id: row.get(1)?,
+                        path: row.get(2)?,
+                        sha256: row.get(3)?,
+                        size_bytes: row.get(4)?,
+                        worker_abi: row.get(5)?,
+                        installed_at: DateTime::parse_from_rfc3339(&installed_at)
+                            .map_err(|error| {
+                                rusqlite::Error::FromSqlConversionFailure(
+                                    6,
+                                    rusqlite::types::Type::Text,
+                                    Box::new(error),
+                                )
+                            })?
+                            .with_timezone(&Utc),
+                    })
+                },
+            )
+            .optional()
+            .map_err(StorageError::from)
+    }
+
+    pub fn list_installed_models(&self) -> Result<Vec<InstalledModel>, StorageError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT name, model_id, path, sha256, size_bytes, worker_abi, installed_at
+             FROM installed_models ORDER BY name",
+        )?;
+        let rows = statement.query_map([], installed_model_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::from)
+    }
+
+    pub fn remove_installed_model(&self, name: &str) -> Result<bool, StorageError> {
+        Ok(self
+            .connection()?
+            .execute("DELETE FROM installed_models WHERE name = ?1", [name])?
+            > 0)
+    }
+
+    pub fn highest_catalog_sequence(&self) -> Result<u64, StorageError> {
+        Ok(self.connection()?.query_row(
+            "SELECT COALESCE((SELECT highest_sequence FROM trusted_catalog WHERE singleton = 1), 0)",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn accept_catalog_sequence(&self, sequence: u64) -> Result<bool, StorageError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let current: u64 = transaction.query_row(
+            "SELECT COALESCE((SELECT highest_sequence FROM trusted_catalog WHERE singleton = 1), 0)",
+            [],
+            |row| row.get(0),
+        )?;
+        if sequence < current {
+            return Ok(false);
+        }
+        transaction.execute(
+            "INSERT INTO trusted_catalog(singleton, highest_sequence) VALUES (1, ?1)
+             ON CONFLICT(singleton) DO UPDATE SET highest_sequence = MAX(highest_sequence, excluded.highest_sequence)",
+            [sequence],
+        )?;
+        transaction.commit()?;
+        Ok(true)
+    }
+}
+
+fn installed_model_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InstalledModel> {
+    let installed_at: String = row.get(6)?;
+    Ok(InstalledModel {
+        name: row.get(0)?,
+        model_id: row.get(1)?,
+        path: row.get(2)?,
+        sha256: row.get(3)?,
+        size_bytes: row.get(4)?,
+        worker_abi: row.get(5)?,
+        installed_at: DateTime::parse_from_rfc3339(&installed_at)
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    6,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?
+            .with_timezone(&Utc),
+    })
 }
 
 fn mode_name(mode: Mode) -> &'static str {
@@ -358,5 +505,24 @@ mod tests {
             Some("OpenWhisper")
         );
         assert_eq!(store.list_strings("snippets").unwrap()[0].0, "sig");
+    }
+
+    #[test]
+    fn stores_models_and_rejects_catalog_rollback() {
+        let store = StateStore::in_memory().unwrap();
+        let model = InstalledModel {
+            name: "balanced".into(),
+            model_id: "fixture".into(),
+            path: "/tmp/model".into(),
+            sha256: "00".repeat(32),
+            size_bytes: 12,
+            worker_abi: "worker-1".into(),
+            installed_at: Utc::now(),
+        };
+        store.put_installed_model(&model).unwrap();
+        assert_eq!(store.installed_model("balanced").unwrap(), Some(model));
+        assert!(store.accept_catalog_sequence(9).unwrap());
+        assert!(!store.accept_catalog_sequence(8).unwrap());
+        assert_eq!(store.highest_catalog_sequence().unwrap(), 9);
     }
 }

@@ -45,6 +45,12 @@ pub enum CaptureState {
         mode: Mode,
         target: Option<DeliveryTarget>,
     },
+    Processing {
+        session_id: Uuid,
+        generation: u64,
+        mode: Mode,
+        target: Option<DeliveryTarget>,
+    },
     Delivering {
         session_id: Uuid,
         generation: u64,
@@ -64,6 +70,7 @@ pub enum CaptureCommand {
     Toggle,
     Cancel,
     BeginDelivery,
+    BeginProcessing,
     Complete,
     Fail,
 }
@@ -113,8 +120,19 @@ impl CaptureCoordinator {
         if !matches!(self.state, CaptureState::Idle | CaptureState::Failed { .. }) {
             return Err(TransitionError::AlreadyActive);
         }
+        self.start_session(Uuid::new_v4(), mode, target)
+    }
+
+    pub fn start_session(
+        &mut self,
+        session_id: Uuid,
+        mode: Mode,
+        target: Option<DeliveryTarget>,
+    ) -> Result<Uuid, TransitionError> {
+        if !matches!(self.state, CaptureState::Idle | CaptureState::Failed { .. }) {
+            return Err(TransitionError::AlreadyActive);
+        }
         self.generation += 1;
-        let session_id = Uuid::new_v4();
         self.state = CaptureState::Capturing {
             session_id,
             generation: self.generation,
@@ -158,7 +176,7 @@ impl CaptureCoordinator {
     }
 
     pub fn begin_delivery(&mut self, generation: u64) -> Result<(), TransitionError> {
-        let CaptureState::Transcribing {
+        let CaptureState::Processing {
             session_id,
             generation: active,
             target,
@@ -184,10 +202,39 @@ impl CaptureCoordinator {
         Ok(())
     }
 
+    pub fn begin_processing(&mut self, generation: u64) -> Result<(), TransitionError> {
+        let CaptureState::Transcribing {
+            session_id,
+            generation: active,
+            mode,
+            target,
+        } = self.state.clone()
+        else {
+            return Err(TransitionError::Invalid {
+                from: self.phase(),
+                command: "begin_processing",
+            });
+        };
+        if active != generation {
+            return Err(TransitionError::Invalid {
+                from: "stale_generation",
+                command: "begin_processing",
+            });
+        }
+        self.state = CaptureState::Processing {
+            session_id,
+            generation,
+            mode,
+            target,
+        };
+        Ok(())
+    }
+
     pub fn complete(&mut self, generation: u64) -> bool {
         let is_current = matches!(
             self.state,
             CaptureState::Transcribing { generation: active, .. }
+                | CaptureState::Processing { generation: active, .. }
                 | CaptureState::Delivering { generation: active, .. } if active == generation
         );
         if is_current {
@@ -210,6 +257,7 @@ impl CaptureCoordinator {
             CaptureState::Idle => None,
             CaptureState::Capturing { session_id, .. }
             | CaptureState::Transcribing { session_id, .. }
+            | CaptureState::Processing { session_id, .. }
             | CaptureState::Delivering { session_id, .. } => Some(session_id),
             CaptureState::Failed { session_id, .. } => session_id,
         };
@@ -225,6 +273,7 @@ impl CaptureCoordinator {
             CaptureState::Idle => "idle",
             CaptureState::Capturing { .. } => "capturing",
             CaptureState::Transcribing { .. } => "transcribing",
+            CaptureState::Processing { .. } => "processing",
             CaptureState::Delivering { .. } => "delivering",
             CaptureState::Failed { .. } => "failed",
         }

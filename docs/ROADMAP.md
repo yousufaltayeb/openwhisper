@@ -1,4 +1,7 @@
-# OpenWhisper roadmap
+# Archived pre-rewrite roadmap
+
+> Archived on 2026-08-20. This Python/Tauri/Flatpak roadmap is historical and
+> must not be used to scope or package the Rust daemon and OpenTUI application.
 
 This roadmap describes intended scope, not a promise of delivery dates. Release
 work is complete only when the corresponding release checklist passes.

@@ -1,7 +1,7 @@
 // @generated from schemas/protocol/openwhisper.schema.json; do not edit by hand.
-export const SCHEMA_SHA256 = "bd57bc6d79cc96ca0ece63b31701477d8653c2706dc7a44319e954353f0841a7";
-export const CURRENT_PROTOCOL_VERSION = 2;
-export const PREVIOUS_PROTOCOL_VERSION = 1;
+export const SCHEMA_SHA256 = "2797cbaa16bb54eb323d54ab276cfd0a8b6a98b176d4dfde55d82ca37d12d0d6";
+export const CURRENT_PROTOCOL_VERSION = 3;
+export const PREVIOUS_PROTOCOL_VERSION = 2;
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -49,6 +49,66 @@ export interface RpcError {
   detail?: string;
   action?: string;
   retryable: boolean;
+}
+
+export type TranscriptMode = "raw" | "clean" | "code";
+export type Language = "auto" | "ar" | "en";
+export type TranscriptionSource = "microphone" | "file" | "stdin";
+export interface ReadinessBlocker { capability: string; code: string; detail: string; action: string }
+export type CaptureState =
+  | { phase: "idle" }
+  | { phase: "capturing"; session_id: string; generation: number; started_at: string; mode: TranscriptMode }
+  | { phase: "transcribing" | "processing"; session_id: string; generation: number; mode: TranscriptMode }
+  | { phase: "delivering"; session_id: string; generation: number }
+  | { phase: "failed"; session_id?: string | null; generation: number; message: string };
+export interface SystemStatus {
+  daemon: string; version: string; protocol: number; capture: CaptureState; capture_available: boolean;
+  blockers: ReadinessBlocker[]; mode: TranscriptMode; language: Language; local_only: boolean;
+  audio_backend?: string; model?: string; model_installing?: boolean;
+}
+export interface TranscriptionResult {
+  session_id: string; generation: number; raw_text: string; final_text: string; language: Language;
+  mode: TranscriptMode; duration_ms: number; source: TranscriptionSource; history_id: string | null;
+  inserted: false; copied: boolean; insertion_method: "clipboard"; warnings: string[];
+}
+export type ModelTrust = "builtin_pinned";
+export type BenchmarkStatus = "not_run";
+export interface ModelInfo {
+  name: string; model_id: string; installed: boolean; selected: boolean; installing: boolean;
+  trust: ModelTrust; benchmark_status: BenchmarkStatus; source: string; license: string;
+  size_bytes: number; sha256: string; worker_abi: string; path?: string;
+}
+export interface ModelDownloadProgress { name: string; downloaded_bytes: number; total_bytes: number }
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid ${label}`);
+  return value as Record<string, unknown>;
+}
+function oneOf(value: unknown, allowed: readonly string[], label: string): string {
+  if (typeof value !== "string" || !allowed.includes(value)) throw new Error(`Invalid ${label}`);
+  return value;
+}
+export function decodeSystemStatus(value: unknown): SystemStatus {
+  const item = record(value, "system status");
+  const capture = record(item.capture, "capture state");
+  oneOf(capture.phase, ["idle", "capturing", "transcribing", "processing", "delivering", "failed"], "capture phase");
+  oneOf(item.mode, ["raw", "clean", "code"], "mode");
+  oneOf(item.language, ["auto", "ar", "en"], "language");
+  if (typeof item.capture_available !== "boolean" || !Array.isArray(item.blockers)) throw new Error("Invalid readiness status");
+  return item as unknown as SystemStatus;
+}
+export function decodeTranscriptionResult(value: unknown): TranscriptionResult {
+  const item = record(value, "transcription result");
+  for (const key of ["session_id", "raw_text", "final_text", "insertion_method"]) if (typeof item[key] !== "string") throw new Error(`Invalid ${key}`);
+  if (typeof item.generation !== "number" || typeof item.duration_ms !== "number" || typeof item.copied !== "boolean" || item.inserted !== false || !Array.isArray(item.warnings)) throw new Error("Invalid transcription result fields");
+  oneOf(item.language, ["auto", "ar", "en"], "language"); oneOf(item.mode, ["raw", "clean", "code"], "mode"); oneOf(item.source, ["microphone", "file", "stdin"], "source");
+  return item as unknown as TranscriptionResult;
+}
+
+export function decodeServerMessage(value: unknown): ServerMessage {
+  const item = record(value, "server message");
+  oneOf(item.type, ["handshake_ack", "response", "error", "event", "snapshot"], "server message type");
+  return item as unknown as ServerMessage;
 }
 
 export type ClientMessage =

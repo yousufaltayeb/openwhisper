@@ -10,7 +10,8 @@
     "check": "tsc --noEmit",
     "test": "bun test",
     "protocol:generate": "bun run ../scripts/generate-protocol-types.ts",
-    "build:host": "bun --config=build.bunfig.toml --no-env-file build --compile --env=disable --outfile dist/openwhisper src/main.ts"
+    "build:host": "bun --config=build.bunfig.toml --no-env-file build --compile --env=disable --outfile dist/openwhisper src/main.ts",
+    "build:dev": "bun --config=build.bunfig.toml --no-env-file build --compile --env=disable --outfile ../target/debug/openwhisper src/main.ts"
   },
   "dependencies": {
     "@opentui/core": "0.5.4"

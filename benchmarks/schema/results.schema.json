@@ -3,7 +3,7 @@
   "title": "OpenWhisper frozen ASR benchmark result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "normalization", "samples", "wer", "cer", "mixed_error_rate", "technical_term_recall", "named_entity_recall", "by_subset", "input_sha256"],
+  "required": ["schema", "normalization", "samples", "wer", "cer", "mixed_error_rate", "confidence_intervals", "technical_term_recall", "named_entity_recall", "by_subset", "input_sha256"],
   "properties": {
     "schema": { "const": 1 },
     "normalization": { "const": "openwhisper-benchmark-v1" },
@@ -11,9 +11,27 @@
     "wer": { "type": "number", "minimum": 0 },
     "cer": { "type": "number", "minimum": 0 },
     "mixed_error_rate": { "type": "number", "minimum": 0 },
+    "confidence_intervals": {
+      "type": "object", "additionalProperties": false,
+      "required": ["wer", "cer", "mixed_error_rate"],
+      "properties": {
+        "wer": { "$ref": "#/$defs/interval" }, "cer": { "$ref": "#/$defs/interval" },
+        "mixed_error_rate": { "$ref": "#/$defs/interval" }
+      }
+    },
     "technical_term_recall": { "type": "number", "minimum": 0, "maximum": 1 },
     "named_entity_recall": { "type": "number", "minimum": 0, "maximum": 1 },
     "by_subset": { "type": "object" },
     "input_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "interval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lower", "upper", "confidence", "iterations"],
+      "properties": {
+        "lower": { "type": "number", "minimum": 0 }, "upper": { "type": "number", "minimum": 0 },
+        "confidence": { "const": 0.95 }, "iterations": { "const": 1000 }
+      }
+    }
   }
 }

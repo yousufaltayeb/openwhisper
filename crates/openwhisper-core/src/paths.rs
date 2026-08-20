@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use directories::{BaseDirs, ProjectDirs};
+use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -39,16 +39,18 @@ impl AppPaths {
         if let Some(root) = env::var_os("OPENWHISPER_V1_HOME") {
             return Ok(Self::under(PathBuf::from(root)));
         }
-        let project = ProjectDirs::from("io.github.yousufaltayeb", "OpenWhisper", "OpenWhisper")
-            .ok_or(PathError::Unavailable)?;
+        let base = BaseDirs::new().ok_or(PathError::Unavailable)?;
+        let config_dir = base.config_dir().join("openwhisper/v1");
+        let data_dir = base.data_dir().join("openwhisper/v1");
+        let cache_dir = base.cache_dir().join("openwhisper/v1");
         let runtime_dir = env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| project.data_local_dir().to_path_buf())
+            .unwrap_or_else(|| data_dir.clone())
             .join(APP_DIR);
         Ok(Self {
-            config_dir: project.config_dir().join("v1"),
-            data_dir: project.data_dir().join("v1"),
-            cache_dir: project.cache_dir().join("v1"),
+            config_dir,
+            data_dir,
+            cache_dir,
             runtime_dir,
         })
     }
@@ -98,6 +100,26 @@ impl AppPaths {
 
     pub fn lock_file(&self) -> PathBuf {
         self.runtime_dir.join("openwhisperd.lock")
+    }
+
+    pub fn model_dir(&self) -> PathBuf {
+        self.data_dir.join("models")
+    }
+
+    pub fn session_dir(&self) -> PathBuf {
+        self.cache_dir.join("sessions")
+    }
+
+    pub fn worker_executable(&self) -> PathBuf {
+        if let Some(path) = env::var_os("OPENWHISPER_WORKER_PATH") {
+            return PathBuf::from(path);
+        }
+        let suffix = if cfg!(windows) { ".exe" } else { "" };
+        env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(format!("openwhisper-worker-native{suffix}"))
     }
 
     #[cfg(unix)]
@@ -152,6 +174,7 @@ mod tests {
         assert!(paths.config_file().ends_with("config/config.toml"));
         assert!(paths.state_file().ends_with("data/state.sqlite3"));
         assert_ne!(paths.config_file(), PathBuf::from("config.ini"));
+        assert!(paths.session_dir().ends_with("cache/sessions"));
     }
 
     #[cfg(unix)]

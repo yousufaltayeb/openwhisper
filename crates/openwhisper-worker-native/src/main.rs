@@ -1,7 +1,8 @@
 use std::io::{self, BufRead, Write};
 
 use openwhisper_worker_native::{
-    MAX_WORKER_MESSAGE_BYTES, WORKER_ABI, WorkerCommand, WorkerRequest, WorkerResponse,
+    CachedTranscriber, MAX_WORKER_MESSAGE_BYTES, WORKER_ABI, WorkerCommand, WorkerRequest,
+    WorkerResponse,
 };
 
 fn write_response(output: &mut impl Write, response: &WorkerResponse) -> io::Result<()> {
@@ -53,6 +54,11 @@ fn main() -> io::Result<()> {
         },
     )?;
     let mut input = stdin.lock();
+    let threads = std::env::var("OPENWHISPER_WORKER_THREADS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let mut transcriber = CachedTranscriber::new(threads);
     while let Some(line) = read_bounded_line(&mut input)? {
         let line = match line {
             Ok(line) => line,
@@ -105,27 +111,50 @@ fn main() -> io::Result<()> {
             WorkerCommand::Transcribe {
                 model_path,
                 audio_path,
-                ..
+                language,
             } => {
-                let (code, message) = if !std::path::Path::new(&model_path).exists() {
-                    ("model_unavailable", "verified model file is unavailable")
+                let error = if !std::path::Path::new(&model_path).exists() {
+                    Some((
+                        "model_unavailable".into(),
+                        "verified model file is unavailable".into(),
+                    ))
                 } else if !std::path::Path::new(&audio_path).exists() {
-                    ("audio_unavailable", "normalized audio file is unavailable")
+                    Some((
+                        "audio_unavailable".into(),
+                        "normalized audio file is unavailable".into(),
+                    ))
                 } else {
-                    (
-                        "backend_not_linked",
-                        "whisper.cpp runtime pack is not linked in this alpha build",
-                    )
+                    match transcriber.transcribe(
+                        std::path::Path::new(&model_path),
+                        std::path::Path::new(&audio_path),
+                        &language,
+                    ) {
+                        Ok((text, language)) => {
+                            write_response(
+                                &mut output,
+                                &WorkerResponse::Transcript {
+                                    id: request.id,
+                                    generation: request.generation,
+                                    text,
+                                    language,
+                                },
+                            )?;
+                            None
+                        }
+                        Err(error) => Some(("transcription_failed".into(), error.to_string())),
+                    }
                 };
-                write_response(
-                    &mut output,
-                    &WorkerResponse::Error {
-                        id: Some(request.id),
-                        generation: request.generation,
-                        code: code.into(),
-                        message: message.into(),
-                    },
-                )?;
+                if let Some((code, message)) = error {
+                    write_response(
+                        &mut output,
+                        &WorkerResponse::Error {
+                            id: Some(request.id),
+                            generation: request.generation,
+                            code,
+                            message,
+                        },
+                    )?;
+                }
             }
         }
     }

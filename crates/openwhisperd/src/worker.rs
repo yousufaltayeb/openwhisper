@@ -27,6 +27,7 @@ pub enum SupervisorError {
 
 pub struct WorkerSupervisor {
     executable: PathBuf,
+    threads: u16,
     child: Child,
     input: BufWriter<ChildStdin>,
     output: Lines<BufReader<ChildStdout>>,
@@ -34,8 +35,19 @@ pub struct WorkerSupervisor {
 
 impl WorkerSupervisor {
     pub async fn spawn(executable: impl AsRef<Path>) -> Result<Self, SupervisorError> {
+        Self::spawn_with_threads(executable, 0).await
+    }
+
+    pub async fn spawn_with_threads(
+        executable: impl AsRef<Path>,
+        threads: u16,
+    ) -> Result<Self, SupervisorError> {
         let executable = executable.as_ref().to_path_buf();
-        let mut child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        if threads > 0 {
+            command.env("OPENWHISPER_WORKER_THREADS", threads.to_string());
+        }
+        let mut child = command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -45,6 +57,7 @@ impl WorkerSupervisor {
         let output = BufReader::new(child.stdout.take().ok_or(SupervisorError::Crashed)?).lines();
         let mut supervisor = Self {
             executable,
+            threads,
             child,
             input,
             output,
@@ -75,7 +88,7 @@ impl WorkerSupervisor {
 
     pub async fn restart(&mut self) -> Result<(), SupervisorError> {
         let _ = self.child.kill().await;
-        let replacement = Self::spawn(&self.executable).await?;
+        let replacement = Self::spawn_with_threads(&self.executable, self.threads).await?;
         *self = replacement;
         Ok(())
     }

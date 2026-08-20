@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+raise SystemExit("Archived pre-rewrite Flatpak workflow; refusing to prepare an obsolete package")
+
 """Create the pinned offline wheelhouse used by Flatpak builds.
 
 Run this only in a controlled release-preparation environment. The resulting

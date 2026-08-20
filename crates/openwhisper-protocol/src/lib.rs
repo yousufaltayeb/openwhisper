@@ -9,10 +9,10 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const CURRENT_PROTOCOL_VERSION: u16 = 2;
-pub const PREVIOUS_PROTOCOL_VERSION: u16 = 1;
+pub const CURRENT_PROTOCOL_VERSION: u16 = 3;
+pub const PREVIOUS_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
-pub const SCHEMA_SHA256: &str = "bd57bc6d79cc96ca0ece63b31701477d8653c2706dc7a44319e954353f0841a7";
+pub const SCHEMA_SHA256: &str = "2797cbaa16bb54eb323d54ab276cfd0a8b6a98b176d4dfde55d82ca37d12d0d6";
 
 pub fn protocol_supported(version: u16) -> bool {
     matches!(
@@ -153,6 +153,156 @@ pub struct Capability {
     pub detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptMode {
+    Raw,
+    Clean,
+    Code,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Language {
+    Auto,
+    Ar,
+    En,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionSource {
+    Microphone,
+    File,
+    Stdin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(tag = "phase", rename_all = "snake_case")]
+pub enum CaptureState {
+    Idle,
+    Capturing {
+        session_id: uuid::Uuid,
+        generation: u64,
+        started_at: chrono::DateTime<chrono::Utc>,
+        mode: TranscriptMode,
+    },
+    Transcribing {
+        session_id: uuid::Uuid,
+        generation: u64,
+        mode: TranscriptMode,
+    },
+    Processing {
+        session_id: uuid::Uuid,
+        generation: u64,
+        mode: TranscriptMode,
+    },
+    Delivering {
+        session_id: uuid::Uuid,
+        generation: u64,
+    },
+    Failed {
+        session_id: Option<uuid::Uuid>,
+        generation: u64,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ReadinessBlocker {
+    pub capability: String,
+    pub code: String,
+    pub detail: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct SystemStatus {
+    pub daemon: String,
+    pub version: String,
+    pub protocol: u16,
+    pub capture: CaptureState,
+    pub capture_available: bool,
+    pub blockers: Vec<ReadinessBlocker>,
+    pub mode: TranscriptMode,
+    pub language: Language,
+    pub local_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct DoctorResult {
+    pub capabilities: Capabilities,
+    pub blockers: Vec<ReadinessBlocker>,
+    pub legacy: Value,
+    pub data: Value,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelTrust {
+    BuiltinPinned,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BenchmarkStatus {
+    NotRun,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ModelInfo {
+    pub name: String,
+    pub model_id: String,
+    pub installed: bool,
+    pub selected: bool,
+    pub installing: bool,
+    pub trust: ModelTrust,
+    pub benchmark_status: BenchmarkStatus,
+    pub source: String,
+    pub license: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub worker_abi: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ModelDownloadProgress {
+    pub name: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TranscriptionResult {
+    pub session_id: uuid::Uuid,
+    pub generation: u64,
+    pub raw_text: String,
+    pub final_text: String,
+    pub language: Language,
+    pub mode: TranscriptMode,
+    pub duration_ms: u64,
+    pub source: TranscriptionSource,
+    pub history_id: Option<uuid::Uuid>,
+    pub inserted: bool,
+    pub copied: bool,
+    pub insertion_method: String,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(tag = "event", content = "data", rename_all = "snake_case")]
+pub enum TypedEvent {
+    CaptureChanged(Value),
+    ConfigChanged(Value),
+    ModelProgress(ModelDownloadProgress),
+    ResultAvailable {
+        session_id: uuid::Uuid,
+        generation: u64,
+    },
 }
 
 #[derive(Debug, Error)]

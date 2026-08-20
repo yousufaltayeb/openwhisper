@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+test-capture = []
+
 [[bin]]
 name = "openwhisperd"
 path = "src/main.rs"
@@ -13,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+chrono.workspace = true
 fs2.workspace = true
 nix.workspace = true
 openwhisper-core = { path = "../openwhisper-core" }

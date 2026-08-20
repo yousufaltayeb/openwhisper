@@ -25,6 +25,10 @@ mod unix {
         let listener = UnixListener::bind(&socket)?;
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
         let state = Arc::new(DaemonState::initialize(paths)?);
+        state
+            .cleanup_runtime_audio()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
         info!(socket = %socket.display(), "openwhisperd ready");
 
         loop {
@@ -52,7 +56,9 @@ mod unix {
         verify_peer(&stream)?;
         let Some(ClientMessage::Handshake {
             protocol_version, ..
-        }) = read_frame(&mut stream).await?
+        }) = tokio::time::timeout(std::time::Duration::from_secs(5), read_frame(&mut stream))
+            .await
+            .map_err(|_| anyhow::anyhow!("IPC handshake timed out"))??
         else {
             write_frame(
                 &mut stream,
@@ -98,28 +104,53 @@ mod unix {
 
         let (mut reader, mut writer) = stream.into_split();
         let mut events = state.subscribe();
+        let (responses, mut response_queue) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscribed = false;
+        let mut subscription_floor = 0_u64;
         loop {
             tokio::select! {
                 incoming = read_frame::<_, ClientMessage>(&mut reader) => {
                     let Some(message) = incoming? else { return Ok(()); };
                     match message {
                         ClientMessage::Request { id, method, params } => {
-                            let response = match state.dispatch(&method, params) {
-                                Ok(result) => ServerMessage::Response { id, result },
-                                Err(error) => ServerMessage::Error { id: Some(id), error },
-                            };
-                            write_frame(&mut writer, &response).await?;
+                            let state = state.clone();
+                            let responses = responses.clone();
+                            tokio::spawn(async move {
+                                let response = match state.dispatch(&method, params).await {
+                                    Ok(result) => ServerMessage::Response { id, result },
+                                    Err(error) => ServerMessage::Error { id: Some(id), error },
+                                };
+                                let _ = responses.send(response);
+                            });
                         }
-                        ClientMessage::Subscribe { .. } => write_frame(&mut writer, &state.snapshot()).await?,
+                        ClientMessage::Subscribe { after_sequence: _ } => {
+                            let snapshot = state.snapshot();
+                            if let ServerMessage::Snapshot { sequence, .. } = &snapshot { subscription_floor = *sequence; }
+                            write_frame(&mut writer, &snapshot).await?;
+                            subscribed = true;
+                        },
                         ClientMessage::Handshake { .. } => {
                             write_frame(&mut writer, &ServerMessage::Error { id: None, error: RpcError::new(ErrorCode::Protocol, "handshake already completed") }).await?;
                         }
                     }
                 }
+                response = response_queue.recv() => {
+                    let Some(response) = response else { return Ok(()); };
+                    write_frame(&mut writer, &response).await?;
+                }
                 event = events.recv() => {
                     match event {
-                        Ok(event) => write_frame(&mut writer, &event).await?,
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => write_frame(&mut writer, &state.snapshot()).await?,
+                        Ok(event @ ServerMessage::Event { sequence, .. }) if subscribed && sequence > subscription_floor => {
+                            subscription_floor = sequence;
+                            write_frame(&mut writer, &event).await?
+                        },
+                        Ok(_) => {},
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) if subscribed => {
+                            let snapshot = state.snapshot();
+                            if let ServerMessage::Snapshot { sequence, .. } = &snapshot { subscription_floor = *sequence; }
+                            write_frame(&mut writer, &snapshot).await?
+                        },
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {},
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
                     }
                 }

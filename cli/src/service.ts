@@ -25,6 +25,7 @@ export async function startDaemon(): Promise<void> {
     stdout: "ignore",
     stderr: "ignore",
     env: process.env,
+    detached: true,
   });
   child.unref();
   for (let attempt = 0; attempt < 30; attempt += 1) {

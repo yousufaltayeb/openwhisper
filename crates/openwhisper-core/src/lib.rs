@@ -10,7 +10,10 @@ pub mod state;
 pub mod storage;
 
 pub use capabilities::detect_capabilities;
-pub use config::{AppConfig, HistoryConfig, OverlayMode, PrivacyConfig};
+pub use config::{
+    AppConfig, AudioBackend, AudioConfig, DeliveryConfig, HistoryConfig, ModelConfig, OverlayMode,
+    PrivacyConfig,
+};
 pub use paths::{AppPaths, LegacyDataReport};
 pub use state::{CaptureCommand, CaptureCoordinator, CaptureState, DeliveryTarget, Mode};
-pub use storage::{HistoryEntry, HistoryInput, StateStore};
+pub use storage::{HistoryEntry, HistoryInput, InstalledModel, StateStore};

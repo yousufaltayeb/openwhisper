@@ -1,4 +1,7 @@
 #!/bin/sh
+echo "Archived pre-rewrite Flatpak workflow; refusing to publish an obsolete package" >&2
+exit 64
+
 # Build a signed OSTree repository and client metadata from an offline Flatpak
 # build. Private key material is supplied by CI secrets only.
 set -eu

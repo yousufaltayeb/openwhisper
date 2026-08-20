@@ -82,3 +82,4 @@ htmlcov/
 /target/
 /cli/node_modules/
 /cli/dist/
+/benchmarks/local-results/

@@ -1,4 +1,8 @@
-# OpenWhisper release checklist
+# Archived pre-rewrite release checklist
+
+> Archived on 2026-08-20. This checklist describes the obsolete
+> Python/Tauri/Flatpak application and is not a release authority for the Rust
+> daemon and OpenTUI application.
 
 Use this checklist for every public release. A checked CI job is evidence, not
 a substitute for checking the shipped artifact.

@@ -6,17 +6,18 @@ per-user daemon owns recording and private state while a Bun-compiled OpenTUI
 client provides interactive and scriptable control.
 
 > **Alpha foundation:** the daemon, IPC, state, CLI, TUI, worker supervision,
-> privacy gates, and test contracts run today. Native audio/insertion/overlay,
-> verified ASR packs, cloud transports, signed installers, and the eight-target
+> privacy gates, built-in pinned `balanced` model path, and test contracts run
+> today. Cross-platform audio/insertion/overlay, cloud transports, signed
+> installers, and the eight-target
 > acceptance matrix remain release blockers. See
 > [1.0 release status](docs/rewrite/RELEASE_STATUS.md). Do not use this branch to
 > make competitive performance claims.
 
 ```text
 openwhisper                Bun/OpenTUI client
-      │ private protocol 2/1 IPC (never microphone audio)
+      │ private protocol 3/2 IPC (never microphone audio)
 openwhisperd               Rust per-user daemon and sole state writer
-      ├─ bounded supervised native worker
+      ├─ persistent CPU whisper.cpp worker (whisper-rs 0.16.0)
       └─ stateless native overlay subscriber
 ```
 
@@ -62,15 +63,25 @@ npm run rewrite:build
 For a development smoke test:
 
 ```bash
-export OPENWHISPERD_PATH="$PWD/target/debug/openwhisperd"
-./cli/dist/openwhisper service start
-./cli/dist/openwhisper doctor --json
-./cli/dist/openwhisper service stop
+npm run rewrite:build:dev
+./target/debug/openwhisper service start
+./target/debug/openwhisper models install balanced
+./target/debug/openwhisper doctor --json
+./target/debug/openwhisper service stop
 ```
 
-No speech model is bundled. The `balanced` large-v3-turbo Q5 entry intentionally
-remains unpinned and un-installable until the signed catalog, license, Arabic
-benchmark, and latency gates are approved.
+No speech model is bundled and no model is fetched during build, startup, TUI
+launch, or diagnostics. An explicit `models install balanced` command can fetch
+the source-build model after interactive confirmation (or `--yes`). The daemon
+pins `large-v3-turbo-q5_0` to Hugging Face commit
+`98aa99a0a9db05ae2342309f5096248665f7cba3`, requires exactly `574041195`
+bytes and SHA-256
+`394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2`,
+uses the MIT license and `openwhisper-worker-1` ABI, and reports trust as
+`builtin_pinned`. Downloads are private, resumable, disk-preflighted, verified,
+and atomically registered. Use `models import balanced <path>` for a completely
+offline install through the same checks. Benchmark status is honestly reported
+as `not_run` and does not gate local dictation.
 
 ## Privacy and data
 
@@ -106,6 +117,12 @@ Publishable results require speaker-disjoint corpora, immutable model/settings/
 hardware manifests, raw predictions, and bootstrap confidence intervals. A
 “better Arabic-English code-switching” claim is forbidden until the documented
 release gate is met reproducibly.
+
+After local dictation works, `npm run benchmark:compare -- ...` can run the
+native worker and archived Faster Whisper provider over the same deterministic
+600-item Perle split. It writes raw, reproducible, non-gating evidence only to
+the gitignored `benchmarks/local-results/` directory and never publishes or
+changes readiness automatically.
 
 ## License and provenance
 

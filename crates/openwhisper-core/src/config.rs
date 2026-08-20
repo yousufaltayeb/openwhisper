@@ -19,6 +19,39 @@ pub struct AppConfig {
     pub history: HistoryConfig,
     pub privacy: PrivacyConfig,
     pub provider: ProviderConfig,
+    pub audio: AudioConfig,
+    pub model: ModelConfig,
+    pub delivery: DeliveryConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioBackend {
+    Auto,
+    Pipewire,
+    Pulse,
+    Alsa,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioConfig {
+    pub backend: AudioBackend,
+    pub device: String,
+    pub max_recording_seconds: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelConfig {
+    pub selected: String,
+    pub threads: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeliveryConfig {
+    pub clipboard: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,7 +94,7 @@ pub struct ProviderConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: 2,
             mode: Mode::Raw,
             language: "auto".into(),
             overlay: OverlayMode::Auto,
@@ -70,7 +103,35 @@ impl Default for AppConfig {
             history: HistoryConfig::default(),
             privacy: PrivacyConfig::default(),
             provider: ProviderConfig::default(),
+            audio: AudioConfig::default(),
+            model: ModelConfig::default(),
+            delivery: DeliveryConfig::default(),
         }
+    }
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            backend: AudioBackend::Auto,
+            device: String::new(),
+            max_recording_seconds: 300,
+        }
+    }
+}
+
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            selected: "balanced".into(),
+            threads: 0,
+        }
+    }
+}
+
+impl Default for DeliveryConfig {
+    fn default() -> Self {
+        Self { clipboard: true }
     }
 }
 
@@ -146,16 +207,46 @@ impl AppConfig {
             path: path.clone(),
             source,
         })?;
-        let config: Self = toml::from_str(&raw).map_err(|source| ConfigError::Parse {
+        let mut document: toml::Value =
+            toml::from_str(&raw).map_err(|source| ConfigError::Parse {
+                path: path.clone(),
+                source,
+            })?;
+        let version = document
+            .get("schema_version")
+            .and_then(toml::Value::as_integer)
+            .unwrap_or(1);
+        if version == 1 {
+            let table = document.as_table_mut().ok_or_else(|| {
+                ConfigError::Validation("configuration root must be a table".into())
+            })?;
+            table.insert("schema_version".into(), toml::Value::Integer(2));
+            table.insert(
+                "audio".into(),
+                toml::Value::try_from(AudioConfig::default()).map_err(ConfigError::Encode)?,
+            );
+            table.insert(
+                "model".into(),
+                toml::Value::try_from(ModelConfig::default()).map_err(ConfigError::Encode)?,
+            );
+            table.insert(
+                "delivery".into(),
+                toml::Value::try_from(DeliveryConfig::default()).map_err(ConfigError::Encode)?,
+            );
+        }
+        let config: Self = document.try_into().map_err(|source| ConfigError::Parse {
             path: path.clone(),
             source,
         })?;
         config.validate()?;
+        if version == 1 {
+            config.save(&path)?;
+        }
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.schema_version != 1 {
+        if self.schema_version != 2 {
             return Err(ConfigError::Validation(format!(
                 "unsupported config schema version {}",
                 self.schema_version
@@ -169,6 +260,16 @@ impl AppConfig {
         if self.privacy.transcript_logs {
             return Err(ConfigError::Validation(
                 "transcript-bearing logs are prohibited".into(),
+            ));
+        }
+        if !(10..=600).contains(&self.audio.max_recording_seconds) {
+            return Err(ConfigError::Validation(
+                "audio.max_recording_seconds must be between 10 and 600".into(),
+            ));
+        }
+        if !matches!(self.language.as_str(), "auto" | "ar" | "en") {
+            return Err(ConfigError::Validation(
+                "language must be auto, ar, or en".into(),
             ));
         }
         Ok(())
@@ -220,6 +321,10 @@ mod tests {
         assert!(!config.privacy.transcript_logs);
         assert_eq!(config.overlay, OverlayMode::Auto);
         assert!(config.sounds.start && config.sounds.stop && config.notifications);
+        assert_eq!(config.schema_version, 2);
+        assert_eq!(config.audio.max_recording_seconds, 300);
+        assert_eq!(config.model.selected, "balanced");
+        assert!(config.delivery.clipboard);
     }
 
     #[test]
@@ -230,5 +335,23 @@ mod tests {
         std::fs::write(temp.path().join("config.ini"), "mode=clean").unwrap();
         let config = AppConfig::load_or_create(&paths).unwrap();
         assert_eq!(config.mode, Mode::Raw);
+    }
+
+    #[test]
+    fn migrates_v1_atomically_to_v2() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(temp.path());
+        paths.ensure().unwrap();
+        let mut value = toml::Value::try_from(AppConfig::default()).unwrap();
+        let table = value.as_table_mut().unwrap();
+        table.insert("schema_version".into(), toml::Value::Integer(1));
+        table.remove("audio");
+        table.remove("model");
+        table.remove("delivery");
+        std::fs::write(paths.config_file(), toml::to_string_pretty(&value).unwrap()).unwrap();
+        let config = AppConfig::load_or_create(&paths).unwrap();
+        assert_eq!(config.schema_version, 2);
+        let persisted = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(persisted.contains("[audio]"));
     }
 }

@@ -7,7 +7,6 @@ fn command_exists(command: &str) -> bool {
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn available(backend: &str, detail: &str) -> Capability {
     Capability {
         available: true,
@@ -43,13 +42,32 @@ pub fn detect_capabilities() -> Capabilities {
             .find(|command| command_exists(command));
         Capabilities {
             audio: audio_backend.map_or_else(
-                || unavailable("none", "No PipeWire, PulseAudio, or ALSA capture tool was found.", "File/stdin transcription remains available."),
-                |backend| unavailable(backend, "A host capture backend was found, but the alpha native adapter is not linked.", "File/stdin transcription remains available."),
+                || {
+                    unavailable(
+                        "none",
+                        "No PipeWire, PulseAudio, or ALSA capture tool was found.",
+                        "File/stdin transcription remains available.",
+                    )
+                },
+                |backend| {
+                    available(
+                        backend,
+                        "The process-backed 16 kHz mono capture adapter is available.",
+                    )
+                },
             ),
             toggle_hotkey: if x11 || (wayland && session_bus) {
-                unavailable(if wayland { "portal" } else { "x11" }, "A session backend is present, but the alpha hotkey adapter is not linked.", "Use explicit CLI commands.")
+                unavailable(
+                    if wayland { "portal" } else { "x11" },
+                    "A session backend is present, but the alpha hotkey adapter is not linked.",
+                    "Use explicit CLI commands.",
+                )
             } else {
-                unavailable("none", "No graphical session control backend was detected.", "Use explicit CLI record commands.")
+                unavailable(
+                    "none",
+                    "No graphical session control backend was detected.",
+                    "Use explicit CLI record commands.",
+                )
             },
             push_to_talk: if wayland {
                 unavailable(
@@ -64,7 +82,11 @@ pub fn detect_capabilities() -> Capabilities {
                     "Use explicit CLI commands.",
                 )
             } else {
-                unavailable("none", "No press/release event backend was detected.", "Use toggle or explicit CLI commands.")
+                unavailable(
+                    "none",
+                    "No press/release event backend was detected.",
+                    "Use toggle or explicit CLI commands.",
+                )
             },
             insertion: if wayland {
                 unavailable(
@@ -79,7 +101,11 @@ pub fn detect_capabilities() -> Capabilities {
                     "Print command output explicitly.",
                 )
             } else {
-                unavailable("none", "No graphical target session was detected.", "Print or copy command output explicitly.")
+                unavailable(
+                    "none",
+                    "No graphical target session was detected.",
+                    "Print or copy command output explicitly.",
+                )
             },
             overlay: if x11 || wlroots {
                 unavailable(
@@ -102,13 +128,48 @@ pub fn detect_capabilities() -> Capabilities {
                     "Use sounds and desktop notifications.",
                 )
             },
-            notifications: if session_bus { unavailable("freedesktop", "A desktop session bus is present, but the alpha notification adapter is not linked.", "Observe CLI/TUI status output.") } else { unavailable("none", "No desktop session bus was detected.", "Observe CLI/TUI status output.") },
-            secrets: if session_bus && command_exists("secret-tool") { unavailable("secret-service", "Secret Service is present, but the alpha credential adapter is not linked.", "Cloud providers remain disabled.") } else { unavailable("secret-service", "No usable Secret Service client was detected.", "Cloud providers stay disabled unless a passphrase-encrypted fallback is explicitly configured.") },
-            service_manager: if command_exists("systemctl") { unavailable("systemd-user", "systemctl is present, but setup is not linked in this alpha build.", "Use foreground development mode.") } else { unavailable("xdg-autostart", "systemd was not detected.", "Use foreground development mode.") },
-            accelerator: unavailable(
+            notifications: if session_bus {
+                unavailable(
+                    "freedesktop",
+                    "A desktop session bus is present, but the alpha notification adapter is not linked.",
+                    "Observe CLI/TUI status output.",
+                )
+            } else {
+                unavailable(
+                    "none",
+                    "No desktop session bus was detected.",
+                    "Observe CLI/TUI status output.",
+                )
+            },
+            secrets: if session_bus && command_exists("secret-tool") {
+                unavailable(
+                    "secret-service",
+                    "Secret Service is present, but the alpha credential adapter is not linked.",
+                    "Cloud providers remain disabled.",
+                )
+            } else {
+                unavailable(
+                    "secret-service",
+                    "No usable Secret Service client was detected.",
+                    "Cloud providers stay disabled unless a passphrase-encrypted fallback is explicitly configured.",
+                )
+            },
+            service_manager: if command_exists("systemctl") {
+                unavailable(
+                    "systemd-user",
+                    "systemctl is present, but setup is not linked in this alpha build.",
+                    "Use foreground development mode.",
+                )
+            } else {
+                unavailable(
+                    "xdg-autostart",
+                    "systemd was not detected.",
+                    "Use foreground development mode.",
+                )
+            },
+            accelerator: available(
                 "cpu",
-                "The worker protocol is available, but no verified whisper.cpp runtime/model is installed.",
-                "Install is blocked until the signed catalog passes release gates.",
+                "The native whisper.cpp CPU backend is linked; model integrity is reported separately by readiness diagnostics.",
             ),
         }
     }
@@ -116,54 +177,102 @@ pub fn detect_capabilities() -> Capabilities {
     #[cfg(target_os = "macos")]
     {
         return Capabilities {
-            audio: available(
+            audio: unavailable(
                 "coreaudio",
-                "Microphone permission is checked before capture.",
+                "The CoreAudio capture adapter is not implemented in this Linux slice.",
+                "Use Linux file/stdin transcription.",
             ),
-            toggle_hotkey: available(
+            toggle_hotkey: unavailable(
                 "carbon",
-                "Global toggle is available after input permission.",
+                "Not implemented in this slice.",
+                "Use CLI commands.",
             ),
-            push_to_talk: available(
+            push_to_talk: unavailable(
                 "event-tap",
-                "Exposed only after press/release diagnostics pass.",
+                "Not implemented in this slice.",
+                "Use toggle commands.",
             ),
-            insertion: available(
+            insertion: unavailable(
                 "accessibility",
-                "Falls back to clipboard when the target is unsafe.",
+                "Not implemented in this slice.",
+                "Use printed output.",
             ),
-            overlay: available("appkit-panel", "Nonactivating panel."),
-            notifications: available("usernotifications", "Desktop notifications available."),
-            secrets: available("keychain", "Keys are stored in the user Keychain."),
-            service_manager: available("launchagent", "Per-user LaunchAgent."),
-            accelerator: available("metal/cpu", "Metal is bundled; CPU remains available."),
+            overlay: unavailable(
+                "appkit-panel",
+                "Not implemented in this slice.",
+                "Use TUI status.",
+            ),
+            notifications: unavailable(
+                "usernotifications",
+                "Not implemented in this slice.",
+                "Use TUI status.",
+            ),
+            secrets: unavailable(
+                "keychain",
+                "Not implemented in this slice.",
+                "Cloud providers remain disabled.",
+            ),
+            service_manager: unavailable(
+                "launchagent",
+                "Not implemented in this slice.",
+                "Run foreground development mode.",
+            ),
+            accelerator: unavailable(
+                "cpu",
+                "The native worker package is not approved on macOS.",
+                "Use Linux.",
+            ),
         };
     }
 
     #[cfg(target_os = "windows")]
     {
         return Capabilities {
-            audio: available("wasapi", "Microphone permission is checked before capture."),
-            toggle_hotkey: available("registerhotkey", "Per-user global toggle."),
-            push_to_talk: available(
+            audio: unavailable(
+                "wasapi",
+                "The WASAPI adapter is not implemented in this Linux slice.",
+                "Use Linux file/stdin transcription.",
+            ),
+            toggle_hotkey: unavailable(
+                "registerhotkey",
+                "Not implemented in this slice.",
+                "Use CLI commands.",
+            ),
+            push_to_talk: unavailable(
                 "low-level-hook",
-                "Exposed only after press/release diagnostics pass.",
+                "Not implemented in this slice.",
+                "Use toggle commands.",
             ),
-            insertion: available(
+            insertion: unavailable(
                 "uia/sendinput",
-                "Elevated and secure targets fall back to clipboard.",
+                "Not implemented in this slice.",
+                "Use printed output.",
             ),
-            overlay: available("win32-layered", "No-activate layered window."),
-            notifications: available(
+            overlay: unavailable(
+                "win32-layered",
+                "Not implemented in this slice.",
+                "Use TUI status.",
+            ),
+            notifications: unavailable(
                 "windows-app-sdk",
-                "Desktop notifications available after setup.",
+                "Not implemented in this slice.",
+                "Use TUI status.",
             ),
-            secrets: available(
+            secrets: unavailable(
                 "credential-manager",
-                "Keys are stored for the current user.",
+                "Not implemented in this slice.",
+                "Cloud providers remain disabled.",
             ),
-            service_manager: available("startup-task", "Per-user background registration."),
-            accelerator: available("cpu", "CUDA/Vulkan packs are explicit downloads."),
+            service_manager: unavailable(
+                "startup-task",
+                "Not implemented in this slice.",
+                "Run foreground development mode.",
+            ),
+            accelerator: unavailable(
+                "cpu",
+                "The native worker package is not approved on Windows.",
+                "Use Linux.",
+            ),
         };
     }
 }

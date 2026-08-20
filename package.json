@@ -2,6 +2,7 @@
   "name": "openwhisper-desktop",
   "private": true,
   "scripts": {
+    "check": "bun run --cwd cli check",
     "tauri:dev": "npm --prefix frontend run tauri:dev",
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
@@ -11,6 +12,8 @@
     "rewrite:protocol": "bun run --cwd cli protocol:generate",
     "rewrite:check": "cargo test --workspace && bun run --cwd cli check && bun test --cwd cli",
     "rewrite:build": "cargo build --workspace --release && bun run --cwd cli build:host",
-    "benchmark:fixture": "bun benchmarks/score.ts benchmarks/fixtures/predictions.jsonl"
+    "rewrite:build:dev": "cargo build --workspace && bun run --cwd cli build:dev",
+    "benchmark:fixture": "bun benchmarks/score.ts benchmarks/fixtures/predictions.jsonl",
+    "benchmark:compare": "bun benchmarks/compare.ts"
   }
 }

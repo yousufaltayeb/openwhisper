@@ -58,6 +58,10 @@ finish-args:
   - --env=OPENWHISPER_AMD_EXTENSION=/app/extensions/io.github.yousufaltayeb.OpenWhisper.Amd
   - --env=PYTHONNOUSERSITE=1
 modules:
+  - name: archived-workflow-guard
+    buildsystem: simple
+    build-commands:
+      - "echo 'Archived pre-rewrite Flatpak manifest; refusing obsolete package build' >&2; false"
   # CPU-only llama.cpp is part of the core runtime for the managed private
   # Qwen3 editing pack. Vulkan/NVIDIA remains an opt-in experiment outside the
   # guaranteed x86_64 CPU path.
