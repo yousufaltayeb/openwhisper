@@ -23,7 +23,7 @@ use openwhisper_protocol::{
 };
 use openwhisper_worker_native::{
     BackendReport, WORKER_ABI, WorkerBackend, WorkerCommand, WorkerRequest, WorkerResponse,
-    decode_pcm_wav, resolve_backend,
+    resolve_backend,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast};
@@ -858,6 +858,13 @@ impl DaemonState {
                 runtime.live_transcript.take(),
             )
         };
+        // Freeze the private capture at the user's stop boundary before waiting for a busy native
+        // inference to be replaced. Otherwise a slow CPU worker can append seconds of trailing
+        // silence while it is shutting down and distort the canonical final transcript.
+        let audio_path = recorder.stop().await.map_err(audio_rpc_error)?;
+        if let Some(level_monitor) = level_monitor {
+            level_monitor.abort();
+        }
         if let Some(stream_task) = stream_task {
             stream_task.abort();
             let _ = stream_task.await;
@@ -865,10 +872,6 @@ impl DaemonState {
             if let Some(worker) = runtime.worker.as_mut() {
                 worker.restart().await.map_err(worker_rpc_error)?;
             }
-        }
-        let audio_path = recorder.stop().await.map_err(audio_rpc_error)?;
-        if let Some(level_monitor) = level_monitor {
-            level_monitor.abort();
         }
         let state = self.clone();
         let task = tokio::spawn(async move {
@@ -1236,29 +1239,21 @@ impl DaemonState {
             .ok_or_else(|| {
                 RpcError::new(ErrorCode::ModelUnavailable, "selected model is missing")
             })?;
-        let mut samples = decode_pcm_wav(audio_path)
-            .map_err(|error| RpcError::new(ErrorCode::TranscriptionFailed, error.to_string()))?;
-        let max_samples = openwhisper_worker_native::MAX_STREAM_SAMPLES;
-        if samples.len() > max_samples {
-            samples.drain(..samples.len() - max_samples);
-        }
-        let pcm_bytes = samples
-            .into_iter()
-            .map(|sample| (sample.clamp(-1.0, 1.0) * 32768.0).round() as i16)
-            .flat_map(i16::to_le_bytes)
-            .collect::<Vec<_>>();
-        let start_command = WorkerCommand::StreamStart {
-            model_path: installed.path,
-            language: config.language.clone(),
-            backend: worker_backend(config.model.backend),
-        };
-        let append = WorkerRequest {
+        // Streaming inference intentionally operates on a bounded rolling window, but the
+        // canonical final transcript must cover the complete private capture. This also keeps a
+        // slow CPU backend from losing speech if its first hypothesis finishes after that window
+        // has advanced into trailing silence.
+        let request = WorkerRequest {
             id: Uuid::new_v4(),
             generation,
-            command: WorkerCommand::StreamAppend {
-                pcm_base64: base64::engine::general_purpose::STANDARD.encode(pcm_bytes),
+            command: WorkerCommand::Transcribe {
+                model_path: installed.path,
+                audio_path: audio_path.to_string_lossy().into_owned(),
+                language: config.language.clone(),
+                backend: worker_backend(config.model.backend),
             },
         };
+        let inference_started = Instant::now();
         let response = {
             let mut runtime = self.runtime.lock().await;
             if runtime.worker.is_none() {
@@ -1270,60 +1265,24 @@ impl DaemonState {
                     .await
                     .map_err(worker_rpc_error)?,
                 );
-                let start = WorkerRequest {
-                    id: Uuid::new_v4(),
-                    generation,
-                    command: start_command.clone(),
-                };
-                runtime
-                    .worker
-                    .as_mut()
-                    .expect("worker initialized")
-                    .request(&start, Duration::from_secs(30))
-                    .await
-                    .map_err(worker_rpc_error)?;
             }
             let worker = runtime.worker.as_mut().expect("worker initialized");
-            let mut recovered = false;
-            loop {
-                match worker.request(&append, Duration::from_secs(120)).await {
-                    Ok(WorkerResponse::Error { code, .. })
-                        if code == "stream_inactive" && !recovered =>
-                    {
-                        recovered = true;
-                        let start = WorkerRequest {
-                            id: Uuid::new_v4(),
-                            generation,
-                            command: start_command.clone(),
-                        };
-                        worker
-                            .request(&start, Duration::from_secs(30))
-                            .await
-                            .map_err(worker_rpc_error)?;
-                    }
-                    Ok(response) => break response,
-                    Err(SupervisorError::Crashed) | Err(SupervisorError::Io(_)) if !recovered => {
-                        recovered = true;
-                        worker.restart().await.map_err(worker_rpc_error)?;
-                        let start = WorkerRequest {
-                            id: Uuid::new_v4(),
-                            generation,
-                            command: start_command.clone(),
-                        };
-                        worker
-                            .request(&start, Duration::from_secs(30))
-                            .await
-                            .map_err(worker_rpc_error)?;
-                    }
-                    Err(error) => return Err(worker_rpc_error(error)),
+            match worker.request(&request, Duration::from_secs(300)).await {
+                Err(SupervisorError::Crashed) | Err(SupervisorError::Io(_)) => {
+                    worker.restart().await.map_err(worker_rpc_error)?;
+                    worker
+                        .request(&request, Duration::from_secs(300))
+                        .await
+                        .map_err(worker_rpc_error)?
                 }
+                result => result.map_err(worker_rpc_error)?,
             }
         };
+        let latency_ms = inference_started.elapsed().as_millis() as u64;
         let (hypothesis, language, latency_ms, backend) = match response {
-            WorkerResponse::StreamHypothesis {
+            WorkerResponse::Transcript {
                 text,
                 language,
-                latency_ms,
                 backend,
                 ..
             } => (text, language, latency_ms, backend),
@@ -1335,21 +1294,10 @@ impl DaemonState {
             _ => {
                 return Err(RpcError::new(
                     ErrorCode::Protocol,
-                    "worker rejected final stream append",
+                    "worker rejected canonical final transcription",
                 ));
             }
         };
-        {
-            let mut runtime = self.runtime.lock().await;
-            if let Some(worker) = runtime.worker.as_mut() {
-                let finish = WorkerRequest {
-                    id: Uuid::new_v4(),
-                    generation,
-                    command: WorkerCommand::StreamFinish,
-                };
-                let _ = worker.request(&finish, Duration::from_secs(30)).await;
-            }
-        }
 
         let live_transcript =
             live_transcript.unwrap_or_else(|| Arc::new(Mutex::new(LiveTranscript::default())));
@@ -1399,8 +1347,11 @@ impl DaemonState {
             } else {
                 let insertion = match target {
                     Some(target) => {
-                        openwhisper_core::clipboard::insert_x11_delta(&target, &processed_suffix)
-                            .await
+                        openwhisper_core::clipboard::insert_x11_final_delta(
+                            &target,
+                            &processed_suffix,
+                        )
+                        .await
                     }
                     None => Err(openwhisper_core::clipboard::ClipboardError::InsertionUnavailable),
                 };

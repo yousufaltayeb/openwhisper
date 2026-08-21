@@ -56,6 +56,21 @@ pub async fn capture_x11_target() -> Result<DeliveryTarget, ClipboardError> {
 }
 
 pub async fn insert_x11_delta(target: &DeliveryTarget, text: &str) -> Result<(), ClipboardError> {
+    insert_x11_text(target, text, true).await
+}
+
+pub async fn insert_x11_final_delta(
+    target: &DeliveryTarget,
+    text: &str,
+) -> Result<(), ClipboardError> {
+    insert_x11_text(target, text, false).await
+}
+
+async fn insert_x11_text(
+    target: &DeliveryTarget,
+    text: &str,
+    restore_previous: bool,
+) -> Result<(), ClipboardError> {
     let current = capture_x11_target().await?;
     if !target.still_matches(&current) {
         return Err(ClipboardError::TargetChanged);
@@ -94,7 +109,7 @@ pub async fn insert_x11_delta(target: &DeliveryTarget, text: &str) -> Result<(),
     // selection well after xdotool returns. Restore in the background only if
     // this exact delta still owns the clipboard. A newer delta or a user copy
     // therefore wins without blocking transcription.
-    if let Some(previous) = previous {
+    if restore_previous && let Some(previous) = previous {
         let temporary = text.to_owned();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
