@@ -25,6 +25,8 @@ pub const DOWNLOAD_DISK_MARGIN: u64 = 64 * 1024 * 1024;
 pub struct BuiltinModelManifest {
     pub name: String,
     pub model_id: String,
+    pub artifact_name: String,
+    pub pinned_revision: String,
     pub source: String,
     pub license: String,
     pub size_bytes: u64,
@@ -34,18 +36,76 @@ pub struct BuiltinModelManifest {
     pub benchmark_status: String,
 }
 
-pub fn builtin_balanced_model() -> BuiltinModelManifest {
+fn manifest(
+    name: &str,
+    model_id: &str,
+    artifact_name: &str,
+    revision: &str,
+    size_bytes: u64,
+    sha256: &str,
+) -> BuiltinModelManifest {
     BuiltinModelManifest {
-        name: BUILTIN_MODEL_NAME.into(),
-        model_id: BUILTIN_MODEL_ID.into(),
-        source: BUILTIN_MODEL_SOURCE.into(),
+        name: name.into(),
+        model_id: model_id.into(),
+        artifact_name: artifact_name.into(),
+        pinned_revision: revision.into(),
+        source: format!(
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/{revision}/{artifact_name}"
+        ),
         license: BUILTIN_MODEL_LICENSE.into(),
-        size_bytes: BUILTIN_MODEL_SIZE,
-        sha256: BUILTIN_MODEL_SHA256.into(),
+        size_bytes,
+        sha256: sha256.into(),
         worker_abi: BUILTIN_WORKER_ABI.into(),
         trust: "builtin_pinned".into(),
         benchmark_status: "not_run".into(),
     }
+}
+
+pub fn builtin_fast_model() -> BuiltinModelManifest {
+    manifest(
+        "fast",
+        "small-q5_1",
+        "ggml-small-q5_1.bin",
+        "98aa99a0a9db05ae2342309f5096248665f7cba3",
+        190_085_487,
+        "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+    )
+}
+
+pub fn builtin_balanced_model() -> BuiltinModelManifest {
+    manifest(
+        BUILTIN_MODEL_NAME,
+        BUILTIN_MODEL_ID,
+        "ggml-large-v3-turbo-q5_0.bin",
+        "98aa99a0a9db05ae2342309f5096248665f7cba3",
+        BUILTIN_MODEL_SIZE,
+        BUILTIN_MODEL_SHA256,
+    )
+}
+
+pub fn builtin_accurate_model() -> BuiltinModelManifest {
+    manifest(
+        "accurate",
+        "large-v3-q5_0",
+        "ggml-large-v3-q5_0.bin",
+        "c521a4b02f422512d734391fdf08bb08c0862f68",
+        1_081_140_203,
+        "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
+    )
+}
+
+pub fn builtin_models() -> [BuiltinModelManifest; 3] {
+    [
+        builtin_fast_model(),
+        builtin_balanced_model(),
+        builtin_accurate_model(),
+    ]
+}
+
+pub fn builtin_model(name: &str) -> Option<BuiltinModelManifest> {
+    builtin_models()
+        .into_iter()
+        .find(|model| model.name == name)
 }
 
 impl BuiltinModelManifest {
@@ -563,6 +623,29 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn all_builtin_profiles_are_exactly_pinned_and_non_benchmarked() {
+        let models = builtin_models();
+        assert_eq!(
+            models.map(|model| model.name),
+            ["fast", "balanced", "accurate"]
+        );
+        for model in builtin_models() {
+            assert_eq!(model.license, "MIT");
+            assert_eq!(model.trust, "builtin_pinned");
+            assert_eq!(model.benchmark_status, "not_run");
+            assert_eq!(model.worker_abi, "openwhisper-worker-1");
+            assert_eq!(model.pinned_revision.len(), 40);
+            assert_eq!(model.sha256.len(), 64);
+            assert!(model.source.contains(&model.pinned_revision));
+            assert!(model.source.ends_with(&model.artifact_name));
+            model
+                .artifact()
+                .validate_for_abi(BUILTIN_WORKER_ABI)
+                .unwrap();
+        }
+    }
 
     #[derive(Clone)]
     struct TestResponse {

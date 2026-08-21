@@ -6,6 +6,7 @@ use thiserror::Error;
 use tokio::fs::{self, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use uuid::Uuid;
@@ -13,6 +14,37 @@ use uuid::Uuid;
 use crate::config::{AudioBackend, AudioConfig};
 
 pub const INTERNAL_SAMPLE_RATE: u32 = 16_000;
+const AUDIO_FLOOR_DBFS: f32 = -60.0;
+const SIGNAL_THRESHOLD_DBFS: f32 = -50.0;
+const CLIPPING_THRESHOLD_DBFS: f32 = -1.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioLevel {
+    pub dbfs: f32,
+    pub peak_dbfs: f32,
+    pub signal: bool,
+    pub clipping: bool,
+    pub bytes_captured: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PcmSnapshot {
+    pub sequence: u64,
+    pub total_bytes: u64,
+    pub pcm: Vec<u8>,
+}
+
+impl Default for AudioLevel {
+    fn default() -> Self {
+        Self {
+            dbfs: AUDIO_FLOOR_DBFS,
+            peak_dbfs: AUDIO_FLOOR_DBFS,
+            signal: false,
+            clipping: false,
+            bytes_captured: 0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioBuffer {
@@ -118,6 +150,8 @@ pub struct ActiveCapture {
     pub wav_path: PathBuf,
     child: Child,
     writer: JoinHandle<Result<u64, AudioError>>,
+    levels: watch::Receiver<AudioLevel>,
+    pcm: watch::Receiver<PcmSnapshot>,
 }
 
 impl ActiveCapture {
@@ -187,10 +221,14 @@ impl ActiveCapture {
             return Err(AudioError::EarlyExit);
         }
         let maximum = u64::from(config.max_recording_seconds) * u64::from(INTERNAL_SAMPLE_RATE) * 2;
+        let (level_tx, levels) = watch::channel(AudioLevel::default());
+        let (pcm_tx, pcm) = watch::channel(PcmSnapshot::default());
         let writer = tokio::spawn(async move {
             let mut file = file;
             let mut total = 0_u64;
             let mut buffer = [0_u8; 16 * 1024];
+            let mut rolling = Vec::new();
+            let mut sequence = 0_u64;
             loop {
                 let read = stdout.read(&mut buffer).await?;
                 if read == 0 {
@@ -201,6 +239,19 @@ impl ActiveCapture {
                     return Err(AudioError::Overflow);
                 }
                 file.write_all(&buffer[..read]).await?;
+                level_tx.send_replace(measure_pcm16(&buffer[..read], total));
+                rolling.extend_from_slice(&buffer[..read]);
+                if rolling.len() > crate::streaming::ROLLING_WINDOW_BYTES {
+                    let excess = rolling.len() - crate::streaming::ROLLING_WINDOW_BYTES;
+                    let aligned = excess + (excess % 2);
+                    rolling.drain(..aligned.min(rolling.len()));
+                }
+                sequence += 1;
+                pcm_tx.send_replace(PcmSnapshot {
+                    sequence,
+                    total_bytes: total,
+                    pcm: rolling.clone(),
+                });
             }
             file.flush().await?;
             file.sync_all().await?;
@@ -213,7 +264,17 @@ impl ActiveCapture {
             wav_path,
             child,
             writer,
+            levels,
+            pcm,
         })
+    }
+
+    pub fn subscribe_levels(&self) -> watch::Receiver<AudioLevel> {
+        self.levels.clone()
+    }
+
+    pub fn subscribe_pcm(&self) -> watch::Receiver<PcmSnapshot> {
+        self.pcm.clone()
     }
 
     pub async fn stop(mut self) -> Result<PathBuf, AudioError> {
@@ -262,6 +323,41 @@ impl ActiveCapture {
         if let Some(directory) = self.partial_path.parent() {
             let _ = fs::remove_dir_all(directory).await;
         }
+    }
+}
+
+fn measure_pcm16(bytes: &[u8], bytes_captured: u64) -> AudioLevel {
+    let mut sum_squares = 0.0_f64;
+    let mut peak = 0.0_f32;
+    let mut samples = 0_u64;
+    for pair in bytes.chunks_exact(2) {
+        let normalized = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / 32768.0;
+        let magnitude = normalized.abs();
+        peak = peak.max(magnitude);
+        sum_squares += f64::from(normalized) * f64::from(normalized);
+        samples += 1;
+    }
+    let rms = if samples == 0 {
+        0.0
+    } else {
+        (sum_squares / samples as f64).sqrt() as f32
+    };
+    let dbfs = amplitude_to_dbfs(rms);
+    let peak_dbfs = amplitude_to_dbfs(peak);
+    AudioLevel {
+        dbfs,
+        peak_dbfs,
+        signal: peak_dbfs > SIGNAL_THRESHOLD_DBFS,
+        clipping: peak_dbfs >= CLIPPING_THRESHOLD_DBFS,
+        bytes_captured,
+    }
+}
+
+fn amplitude_to_dbfs(amplitude: f32) -> f32 {
+    if amplitude <= 0.0 {
+        AUDIO_FLOOR_DBFS
+    } else {
+        (20.0 * amplitude.log10()).clamp(AUDIO_FLOOR_DBFS, 0.0)
     }
 }
 
@@ -438,5 +534,27 @@ mod tests {
                 "-D", "hw:1", "-q", "-t", "raw", "-f", "S16_LE", "-r", "16000", "-c", "1"
             ]
         );
+    }
+
+    #[test]
+    fn measures_silence_signal_and_clipping_from_pcm16() {
+        let silence = measure_pcm16(&[0, 0, 0, 0], 4);
+        assert_eq!(silence.dbfs, AUDIO_FLOOR_DBFS);
+        assert!(!silence.signal);
+        assert!(!silence.clipping);
+        assert_eq!(silence.bytes_captured, 4);
+
+        let signal_bytes = [16_384_i16, -16_384_i16]
+            .into_iter()
+            .flat_map(i16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let signal = measure_pcm16(&signal_bytes, 8_192);
+        assert!((-6.1..=-6.0).contains(&signal.dbfs));
+        assert!(signal.signal);
+        assert!(!signal.clipping);
+
+        let clipping = measure_pcm16(&i16::MAX.to_le_bytes(), 2);
+        assert!(clipping.signal);
+        assert!(clipping.clipping);
     }
 }

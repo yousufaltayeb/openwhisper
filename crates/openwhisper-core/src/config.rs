@@ -45,13 +45,24 @@ pub struct AudioConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
     pub selected: String,
+    pub backend: InferenceBackend,
     pub threads: u16,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceBackend {
+    #[default]
+    Auto,
+    Vulkan,
+    Cpu,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeliveryConfig {
     pub clipboard: bool,
+    pub live_insert: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,7 +105,7 @@ pub struct ProviderConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            schema_version: 2,
+            schema_version: 3,
             mode: Mode::Raw,
             language: "auto".into(),
             overlay: OverlayMode::Auto,
@@ -124,6 +135,7 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             selected: "balanced".into(),
+            backend: InferenceBackend::Auto,
             threads: 0,
         }
     }
@@ -131,7 +143,10 @@ impl Default for ModelConfig {
 
 impl Default for DeliveryConfig {
     fn default() -> Self {
-        Self { clipboard: true }
+        Self {
+            clipboard: true,
+            live_insert: true,
+        }
     }
 }
 
@@ -220,7 +235,7 @@ impl AppConfig {
             let table = document.as_table_mut().ok_or_else(|| {
                 ConfigError::Validation("configuration root must be a table".into())
             })?;
-            table.insert("schema_version".into(), toml::Value::Integer(2));
+            table.insert("schema_version".into(), toml::Value::Integer(3));
             table.insert(
                 "audio".into(),
                 toml::Value::try_from(AudioConfig::default()).map_err(ConfigError::Encode)?,
@@ -233,20 +248,45 @@ impl AppConfig {
                 "delivery".into(),
                 toml::Value::try_from(DeliveryConfig::default()).map_err(ConfigError::Encode)?,
             );
+        } else if version == 2 {
+            let table = document.as_table_mut().ok_or_else(|| {
+                ConfigError::Validation("configuration root must be a table".into())
+            })?;
+            table.insert("schema_version".into(), toml::Value::Integer(3));
+            let model = table
+                .entry("model")
+                .or_insert_with(|| toml::Value::Table(Default::default()));
+            let model = model.as_table_mut().ok_or_else(|| {
+                ConfigError::Validation("model configuration must be a table".into())
+            })?;
+            model
+                .entry("backend")
+                .or_insert_with(|| toml::Value::String("auto".into()));
+            let delivery = table
+                .entry("delivery")
+                .or_insert_with(|| toml::Value::Table(Default::default()));
+            let delivery = delivery.as_table_mut().ok_or_else(|| {
+                ConfigError::Validation("delivery configuration must be a table".into())
+            })?;
+            let migrated = delivery
+                .remove("paste")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true);
+            delivery.insert("live_insert".into(), toml::Value::Boolean(migrated));
         }
         let config: Self = document.try_into().map_err(|source| ConfigError::Parse {
             path: path.clone(),
             source,
         })?;
         config.validate()?;
-        if version == 1 {
+        if version <= 2 {
             config.save(&path)?;
         }
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.schema_version != 2 {
+        if self.schema_version != 3 {
             return Err(ConfigError::Validation(format!(
                 "unsupported config schema version {}",
                 self.schema_version
@@ -270,6 +310,14 @@ impl AppConfig {
         if !matches!(self.language.as_str(), "auto" | "ar" | "en") {
             return Err(ConfigError::Validation(
                 "language must be auto, ar, or en".into(),
+            ));
+        }
+        if !matches!(
+            self.model.selected.as_str(),
+            "fast" | "balanced" | "accurate"
+        ) {
+            return Err(ConfigError::Validation(
+                "model.selected must be fast, balanced, or accurate".into(),
             ));
         }
         Ok(())
@@ -321,10 +369,12 @@ mod tests {
         assert!(!config.privacy.transcript_logs);
         assert_eq!(config.overlay, OverlayMode::Auto);
         assert!(config.sounds.start && config.sounds.stop && config.notifications);
-        assert_eq!(config.schema_version, 2);
+        assert_eq!(config.schema_version, 3);
         assert_eq!(config.audio.max_recording_seconds, 300);
         assert_eq!(config.model.selected, "balanced");
+        assert_eq!(config.model.backend, InferenceBackend::Auto);
         assert!(config.delivery.clipboard);
+        assert!(config.delivery.live_insert);
     }
 
     #[test]
@@ -338,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v1_atomically_to_v2() {
+    fn migrates_v1_atomically_to_v3() {
         let temp = tempfile::tempdir().unwrap();
         let paths = AppPaths::under(temp.path());
         paths.ensure().unwrap();
@@ -350,8 +400,36 @@ mod tests {
         table.remove("delivery");
         std::fs::write(paths.config_file(), toml::to_string_pretty(&value).unwrap()).unwrap();
         let config = AppConfig::load_or_create(&paths).unwrap();
-        assert_eq!(config.schema_version, 2);
+        assert_eq!(config.schema_version, 3);
         let persisted = std::fs::read_to_string(paths.config_file()).unwrap();
         assert!(persisted.contains("[audio]"));
+    }
+
+    #[test]
+    fn migrates_v2_paste_to_v3_live_insert() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(temp.path());
+        paths.ensure().unwrap();
+        let mut value = toml::Value::try_from(AppConfig::default()).unwrap();
+        let table = value.as_table_mut().unwrap();
+        table.insert("schema_version".into(), toml::Value::Integer(2));
+        table
+            .get_mut("model")
+            .unwrap()
+            .as_table_mut()
+            .unwrap()
+            .remove("backend");
+        let delivery = table.get_mut("delivery").unwrap().as_table_mut().unwrap();
+        delivery.remove("live_insert");
+        delivery.insert("paste".into(), toml::Value::Boolean(false));
+        std::fs::write(paths.config_file(), toml::to_string_pretty(&value).unwrap()).unwrap();
+
+        let config = AppConfig::load_or_create(&paths).unwrap();
+        assert_eq!(config.schema_version, 3);
+        assert_eq!(config.model.backend, InferenceBackend::Auto);
+        assert!(!config.delivery.live_insert);
+        let persisted = std::fs::read_to_string(paths.config_file()).unwrap();
+        assert!(!persisted.contains("paste ="));
+        assert!(persisted.contains("live_insert = false"));
     }
 }

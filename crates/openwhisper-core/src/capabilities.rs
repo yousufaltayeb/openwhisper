@@ -88,7 +88,15 @@ pub fn detect_capabilities() -> Capabilities {
                     "Use toggle or explicit CLI commands.",
                 )
             },
-            insertion: if wayland {
+            insertion: if x11
+                && command_exists("xdotool")
+                && (command_exists("xclip") || command_exists("xsel"))
+            {
+                available(
+                    "x11-clipboard",
+                    "The daemon can retain an X11 target and paste Unicode-safe committed deltas.",
+                )
+            } else if wayland {
                 unavailable(
                     "at-spi",
                     "Arbitrary Wayland insertion is session-dependent.",
@@ -96,9 +104,9 @@ pub fn detect_capabilities() -> Capabilities {
                 )
             } else if x11 {
                 unavailable(
-                    "at-spi/x11",
-                    "A target backend exists, but the alpha insertion adapter is not linked.",
-                    "Print command output explicitly.",
+                    "x11-clipboard",
+                    "X11 insertion requires xdotool plus xclip or xsel.",
+                    "Install the missing desktop tools or use clipboard-only delivery.",
                 )
             } else {
                 unavailable(

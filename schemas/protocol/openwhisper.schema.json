@@ -36,19 +36,30 @@
         "blockers": { "type": "array", "items": { "$ref": "#/$defs/readinessBlocker" } },
         "mode": { "$ref": "#/$defs/mode" }, "language": { "$ref": "#/$defs/language" }, "local_only": { "type": "boolean" },
         "audio_backend": { "type": "string" }, "model": { "type": "string" },
+        "requested_backend": { "enum": ["auto", "vulkan", "cpu"] },
+        "actual_backend": { "enum": ["vulkan", "cpu", "unavailable"] },
+        "gpu_device": { "type": ["string", "null"] },
+        "backend_fallback_reason": { "type": ["string", "null"] },
+        "backend_error": { "type": ["string", "null"] },
+        "model_verification": { "enum": ["missing", "verified", "corrupt", "installing"] },
+        "benchmark_status": { "const": "not_run" },
+        "streaming": { "$ref": "#/$defs/jsonValue" },
         "model_installing": { "type": "boolean" }
       }
     },
     "modelInfo": {
       "type": "object", "additionalProperties": false,
-      "required": ["name", "model_id", "installed", "selected", "installing", "trust", "benchmark_status", "source", "license", "size_bytes", "sha256", "worker_abi"],
+      "required": ["name", "model_id", "installed", "selected", "installing", "trust", "benchmark_status", "source", "license", "size_bytes", "sha256", "worker_abi", "artifact_name", "pinned_revision", "verification_state"],
       "properties": {
         "name": { "type": "string" }, "model_id": { "type": "string" },
         "installed": { "type": "boolean" }, "selected": { "type": "boolean" }, "installing": { "type": "boolean" },
         "trust": { "const": "builtin_pinned" }, "benchmark_status": { "const": "not_run" },
         "source": { "type": "string", "format": "uri" }, "license": { "type": "string" },
         "size_bytes": { "type": "integer", "minimum": 1 }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "worker_abi": { "type": "string" }, "path": { "type": "string" }
+        "worker_abi": { "type": "string" }, "artifact_name": { "type": "string" },
+        "pinned_revision": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "verification_state": { "enum": ["missing", "verified", "corrupt", "installing"] },
+        "path": { "type": "string" }
       }
     },
     "modelDownloadProgress": {
@@ -61,13 +72,20 @@
     },
     "transcriptionResult": {
       "type": "object", "additionalProperties": false,
-      "required": ["session_id", "generation", "raw_text", "final_text", "language", "mode", "duration_ms", "source", "history_id", "inserted", "copied", "insertion_method", "warnings"],
+      "required": ["session_id", "generation", "raw_text", "final_text", "language", "mode", "duration_ms", "source", "history_id", "inserted", "inserted_bytes", "insertion_status", "copied", "insertion_method", "requested_backend", "actual_backend", "streaming_latency_ms", "warnings"],
       "properties": {
         "session_id": { "type": "string", "format": "uuid" }, "generation": { "type": "integer", "minimum": 1 },
         "raw_text": { "type": "string" }, "final_text": { "type": "string" }, "language": { "$ref": "#/$defs/language" }, "mode": { "$ref": "#/$defs/mode" },
         "duration_ms": { "type": "integer", "minimum": 0 }, "source": { "$ref": "#/$defs/source" },
-        "history_id": { "type": ["string", "null"], "format": "uuid" }, "inserted": { "const": false }, "copied": { "type": "boolean" },
-        "insertion_method": { "const": "clipboard" }, "warnings": { "type": "array", "items": { "type": "string" } }
+        "history_id": { "type": ["string", "null"], "format": "uuid" }, "inserted": { "type": "boolean" },
+        "inserted_bytes": { "type": "integer", "minimum": 0 },
+        "insertion_status": { "enum": ["not_requested", "active", "complete", "suspended", "partial", "failed"] },
+        "copied": { "type": "boolean" }, "insertion_method": { "type": "string" },
+        "requested_backend": { "enum": ["auto", "vulkan", "cpu", "unknown"] },
+        "actual_backend": { "enum": ["vulkan", "cpu", "unknown"] },
+        "gpu_device": { "type": "string" }, "backend_fallback_reason": { "type": "string" },
+        "streaming_latency_ms": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "array", "items": { "type": "string" } }
       }
     },
     "methodParams": {
@@ -75,7 +93,7 @@
       "description": "Per-method parameters are validated by the daemon; unknown fields are rejected.",
       "properties": {
         "mode": { "$ref": "#/$defs/mode" }, "language": { "$ref": "#/$defs/language" },
-        "wait": { "type": "boolean" }, "copy": { "type": "boolean" }, "path": { "type": "string" }
+        "wait": { "type": "boolean" }, "copy": { "type": "boolean" }, "insert_live": { "type": "boolean" }, "path": { "type": "string" }
       }
     },
     "capability": {

@@ -68,12 +68,14 @@ export function parseCommand(args: string[]): ParsedCommand {
 
   if (group === "record") {
     if (!["start", "stop", "toggle", "cancel", "status"].includes(action ?? "")) throw localError("usage", "Record action must be start, stop, toggle, cancel, or status.");
-    validateTail(args, 2, ["--mode"], ["--wait"]);
+    validateTail(args, 2, ["--mode"], ["--wait", "--insert-live"]);
     if (args.includes("--wait") && action !== "stop") throw localError("usage", "--wait is supported only by `record stop`.");
     if (args.includes("--mode") && !["start", "toggle"].includes(action!)) throw localError("usage", "--mode is supported only by record start/toggle.");
+    if (args.includes("--insert-live") && !["start", "toggle"].includes(action!)) throw localError("usage", "--insert-live is supported only by record start/toggle.");
     const mode = enumValue(option(args, "--mode"), "--mode", ["raw", "clean", "code"]);
     const params: Record<string, JsonValue> = {};
     if (mode) params.mode = mode;
+    if (args.includes("--insert-live")) params.insert_live = true;
     if (action === "stop") params.wait = args.includes("--wait");
     return rpc(`record.${action}`, params);
   }
@@ -141,6 +143,7 @@ function namedResourceCommand(group: string, action: string | undefined, args: s
   if (action === "list") { validateTail(args, 2); return rpc(`${group}.list`); }
   if (group === "models" && action === "import") {
     const name = requireArg(args, 2, "model name");
+    enumValue(name, "model", ["fast", "balanced", "accurate"]);
     const path = requireArg(args, 3, "model path");
     validateTail(args, 4);
     if (!existsSync(path)) throw localError("io", `Input does not exist: ${path}`);
@@ -148,11 +151,13 @@ function namedResourceCommand(group: string, action: string | undefined, args: s
   }
   if (group === "models" && action === "install") {
     const name = requireArg(args, 2, "model name");
+    enumValue(name, "model", ["fast", "balanced", "accurate"]);
     validateTail(args, 3, [], ["--yes"]);
     return rpc("models.install", { name, yes: args.includes("--yes") });
   }
   if (["install", "remove", "verify", "select", "import", "configure", "test", "unset"].includes(action ?? "")) {
     const name = requireArg(args, 2, `${group} name`);
+    if (group === "models") enumValue(name, "model", ["fast", "balanced", "accurate"]);
     validateTail(args, 3);
     return rpc(`${group}.${action}`, { name });
   }

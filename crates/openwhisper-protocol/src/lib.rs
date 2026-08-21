@@ -12,7 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const CURRENT_PROTOCOL_VERSION: u16 = 3;
 pub const PREVIOUS_PROTOCOL_VERSION: u16 = 2;
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
-pub const SCHEMA_SHA256: &str = "2797cbaa16bb54eb323d54ab276cfd0a8b6a98b176d4dfde55d82ca37d12d0d6";
+pub const SCHEMA_SHA256: &str = "c29f39bc3760ad91c5c300c870828453a49357d70d54786e159cac2a2980b58f";
 
 pub fn protocol_supported(version: u16) -> bool {
     matches!(
@@ -265,6 +265,9 @@ pub struct ModelInfo {
     pub size_bytes: u64,
     pub sha256: String,
     pub worker_abi: String,
+    pub artifact_name: String,
+    pub pinned_revision: String,
+    pub verification_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
@@ -288,9 +291,63 @@ pub struct TranscriptionResult {
     pub source: TranscriptionSource,
     pub history_id: Option<uuid::Uuid>,
     pub inserted: bool,
+    pub inserted_bytes: u64,
+    pub insertion_status: InsertionStatus,
     pub copied: bool,
     pub insertion_method: String,
+    pub requested_backend: String,
+    pub actual_backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gpu_device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_fallback_reason: Option<String>,
+    pub streaming_latency_ms: u64,
     pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InsertionStatus {
+    NotRequested,
+    Active,
+    Complete,
+    Suspended,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct TranscriptionPreviewEvent {
+    pub generation: u64,
+    pub text: String,
+    pub language: Language,
+    pub latency_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TranscriptionCommitEvent {
+    pub generation: u64,
+    pub delta: String,
+    pub committed: String,
+    pub final_commit: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct RecordingLevelEvent {
+    pub generation: u64,
+    pub dbfs: f32,
+    pub peak_dbfs: f32,
+    pub signal: bool,
+    pub clipping: bool,
+    pub bytes_captured: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct InsertionStateEvent {
+    pub generation: u64,
+    pub status: InsertionStatus,
+    pub inserted_bytes: u64,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -299,6 +356,10 @@ pub enum TypedEvent {
     CaptureChanged(Value),
     ConfigChanged(Value),
     ModelProgress(ModelDownloadProgress),
+    TranscriptionPreview(TranscriptionPreviewEvent),
+    TranscriptionCommit(TranscriptionCommitEvent),
+    RecordingLevel(RecordingLevelEvent),
+    InsertionState(InsertionStateEvent),
     ResultAvailable {
         session_id: uuid::Uuid,
         generation: u64,

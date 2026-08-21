@@ -6,8 +6,9 @@ per-user daemon owns recording and private state while a Bun-compiled OpenTUI
 client provides interactive and scriptable control.
 
 > **Alpha foundation:** the daemon, IPC, state, CLI, TUI, worker supervision,
-> privacy gates, built-in pinned `balanced` model path, and test contracts run
-> today. Cross-platform audio/insertion/overlay, cloud transports, signed
+> privacy gates, native streaming, three pinned model profiles, X11 live
+> insertion, and test contracts run today. Cross-platform audio/insertion/
+> overlay, cloud transports, signed
 > installers, and the eight-target
 > acceptance matrix remain release blockers. See
 > [1.0 release status](docs/rewrite/RELEASE_STATUS.md). Do not use this branch to
@@ -17,7 +18,7 @@ client provides interactive and scriptable control.
 openwhisper                Bun/OpenTUI client
       │ private protocol 3/2 IPC (never microphone audio)
 openwhisperd               Rust per-user daemon and sole state writer
-      ├─ persistent CPU whisper.cpp worker (whisper-rs 0.16.0)
+      ├─ persistent Vulkan/CPU whisper.cpp worker (whisper-rs 0.16.0)
       └─ stateless native overlay subscriber
 ```
 
@@ -28,13 +29,13 @@ it prints help without starting the daemon or terminal renderer.
 
 ```text
 openwhisper [ui]
-openwhisper record start|stop|toggle|cancel|status [--wait]
+openwhisper record start|toggle [--insert-live] | stop [--wait] | cancel | status
 openwhisper transcribe <path|-> [--mode raw|clean|code] [--insert]
 openwhisper history list|search|show|copy|delete|clear|export
 openwhisper modes list|show|select
 openwhisper vocab list|add|remove|import|export
 openwhisper snippets list|add|remove|run|import|export
-openwhisper models list|install|remove|verify|select|import
+openwhisper models list|install|remove|verify|select|import fast|balanced|accurate
 openwhisper providers list|configure|test|unset
 openwhisper config list|get|set
 openwhisper service install|start|stop|restart|status|uninstall
@@ -55,33 +56,69 @@ system Python at runtime for the new application.
 
 ```bash
 bun --cwd cli install --frozen-lockfile
-npm run rewrite:protocol
-npm run rewrite:check
-npm run rewrite:build
+bun run rewrite:protocol
+bun run rewrite:check
+bun run rewrite:build
 ```
 
 For a development smoke test:
 
 ```bash
-npm run rewrite:build:dev
+bun run rewrite:build:dev
 ./target/debug/openwhisper service start
 ./target/debug/openwhisper models install balanced
+./target/debug/openwhisper config set model.backend auto
 ./target/debug/openwhisper doctor --json
 ./target/debug/openwhisper service stop
 ```
 
-No speech model is bundled and no model is fetched during build, startup, TUI
-launch, or diagnostics. An explicit `models install balanced` command can fetch
-the source-build model after interactive confirmation (or `--yes`). The daemon
-pins `large-v3-turbo-q5_0` to Hugging Face commit
-`98aa99a0a9db05ae2342309f5096248665f7cba3`, requires exactly `574041195`
-bytes and SHA-256
-`394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2`,
-uses the MIT license and `openwhisper-worker-1` ABI, and reports trust as
-`builtin_pinned`. Downloads are private, resumable, disk-preflighted, verified,
-and atomically registered. Use `models import balanced <path>` for a completely
-offline install through the same checks. Benchmark status is honestly reported
-as `not_run` and does not gate local dictation.
+`service start` launches a detached per-user daemon, so the terminal can close
+after it reports success. The TUI is only a control and diagnostics client; while
+it is open, Capture shows measured dBFS, bytes, signal/clipping, provisional and
+committed text, selected model, actual backend, latency, and insertion state.
+
+Press `6` to open Settings. Use Up/Down to select a setting, Left/Right to cycle
+fixed choices, and Enter to edit text or numeric values. Enter saves immediately
+through the daemon; Escape cancels the edit. Language, capture mode, microphone,
+inference backend, CPU threads, worker limits, history, live insertion,
+clipboard, privacy, notifications, overlay, and sound cues are configurable
+without leaving the TUI. In Models, Up/Down chooses a profile; `I`, `V`, `S`,
+and `R` install, verify, select, and remove it.
+
+Enable **Live insertion** to insert stable global-hotkey dictation while
+speaking. The daemon verifies the original X11 window before every Unicode-safe
+clipboard paste. Focus changes or insertion failures suspend typing for that
+session while transcription continues. TUI recording is always preview-only.
+
+The native global-hotkey adapter is not linked in this alpha source build. For a
+temporary terminal-free X11 workflow with dunst feedback, assign `Alt+O` in the
+desktop's custom keyboard shortcuts to the absolute paths of Bun and the bundled
+hotkey wrapper:
+
+```bash
+/absolute/path/to/bun /absolute/path/to/openwhisper/scripts/openwhisper-hotkey.ts
+```
+
+Use an absolute path because desktop shortcut launchers do not inherit the
+checkout's working directory. The first press starts daemon-owned live insertion
+and a persistent notification. The daemon rate-limits elapsed-time updates with
+`OPEN`, `LIVE`, `SIGNAL`, or `CLIPPING`; transcript text never enters a
+notification. The second press flushes only the remaining words. No terminal or
+TUI stays open, and the detached daemon remains running.
+
+No speech model is bundled or fetched during build, startup, TUI launch, or
+diagnostics. Explicit installs offer `fast` (`ggml-small-q5_1.bin`, 190085487
+bytes), `balanced` (`ggml-large-v3-turbo-q5_0.bin`, 574041195 bytes), and
+`accurate` (`ggml-large-v3-q5_0.bin`, 1081140203 bytes). Each MIT artifact has a
+built-in commit pin, exact SHA-256, `builtin_pinned` trust, and
+`openwhisper-worker-1` ABI. Downloads are resumable and atomically verified;
+offline imports use the same checks. Benchmark status is `not_run` and never
+blocks dictation or implies performance.
+
+`model.backend` accepts `auto`, `vulkan`, or `cpu`. Auto prefers Vulkan and
+reports the actual device or an explicit CPU fallback reason. Vulkan is strict:
+an unavailable Vulkan runtime blocks readiness. CPU forces GPU use off and
+honors `model.threads`.
 
 ## Privacy and data
 
@@ -110,7 +147,7 @@ recall, and named-entity recall from raw prediction JSONL. The included fixture
 tests metric plumbing only:
 
 ```bash
-npm run benchmark:fixture
+bun run benchmark:fixture
 ```
 
 Publishable results require speaker-disjoint corpora, immutable model/settings/
@@ -118,7 +155,7 @@ hardware manifests, raw predictions, and bootstrap confidence intervals. A
 “better Arabic-English code-switching” claim is forbidden until the documented
 release gate is met reproducibly.
 
-After local dictation works, `npm run benchmark:compare -- ...` can run the
+After local dictation works, `bun run benchmark:compare -- ...` can run the
 native worker and archived Faster Whisper provider over the same deterministic
 600-item Perle split. It writes raw, reproducible, non-gating evidence only to
 the gitignored `benchmarks/local-results/` directory and never publishes or

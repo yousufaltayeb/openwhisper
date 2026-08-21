@@ -2,13 +2,13 @@ export const HELP = `OpenWhisper — local-first Arabic-English dictation
 
 Usage:
   openwhisper [ui]
-  openwhisper record start|stop|toggle|cancel|status [--wait]
+  openwhisper record start|toggle [--insert-live] | stop [--wait] | cancel | status
   openwhisper transcribe <path|-> [--mode raw|clean|code] [--insert]
   openwhisper history list|search|show|copy|delete|clear|export
   openwhisper modes list|show|select
   openwhisper vocab list|add|remove|import|export
   openwhisper snippets list|add|remove|run|import|export
-  openwhisper models list|install|remove|verify|select|import
+  openwhisper models list|install|remove|verify|select|import fast|balanced|accurate
   openwhisper providers list|configure|test|unset
   openwhisper config list|get|set
   openwhisper service install|start|stop|restart|status|uninstall

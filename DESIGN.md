@@ -324,24 +324,35 @@ Terminal fonts and BiDi rendering belong to the emulator, so the client stores
 and submits Arabic and mixed-direction text in logical Unicode order without
 visual reshaping.
 
+Capture is a live instrument rather than a record-then-wait screen. Beside the
+meter it names committed text, provisional text, selected model, actual backend,
+last inference latency, and whether insertion is active or suspended. TUI
+capture is explicitly preview-only so it cannot type into its own terminal.
+
 The numbered views are data-backed rather than specimen copy: History reads
 `history.list`; Modes reads `modes.list`; Words joins `vocab.list` and
-`snippets.list`; Models joins `models.list` and `providers.list`; Settings,
-Doctor, and Logs read `config.list`, `system.doctor`, and `system.logs`.
+`snippets.list`; Models joins `models.list` and `providers.list`; Settings reads
+`config.list` and persists edits through `config.set`; Doctor and Logs read
+`system.doctor` and `system.logs`.
 Keys 1–8 switch views; R toggles capture; C cancels; and Q exits. Context keys
 stay local to their stage: L reloads History or Logs, M advances mode, V reloads
-Words, I inspects the model release gate, P toggles local-only privacy, and D
-refreshes Doctor.
+Words, and D refreshes Doctor. In Models, Up/Down chooses fast, balanced, or
+accurate; I/V/S/R install, verify, select, and remove the profile. In Settings,
+Up/Down selects, Left/Right cycles fixed choices, and Enter toggles a choice or
+opens text/integer entry. Enter saves through the daemon, Escape cancels, and
+the notice row reports validation, pending writes, success, or failure. Model
+and backend changes explain their disabled state during capture or download.
 
 At fewer than 85 columns, labels compact predictably to Capt, Hist, Modes,
 Words, Modl, Sett, Doct, and Logs. At fewer than 70 columns, contextual hints
 yield before capture controls. The 52×16 critical fixture is the minimum
 interaction reference: wrapped status and view rows may consume height, and
 body copy may clip, but `[REC]`, `[R] stop`, `[C] cancel`, and `[Q] quit` remain
-visible. The renderer owns the alternate screen and is destroyed in `finally`,
-restoring the terminal after normal exit, supported signals, setup/runtime
-errors, or daemon disconnect. Noninteractive commands are the
-accessible/scriptable equivalent of every view.
+visible. Settings becomes a one-setting-at-a-time readout at this size so its
+selected value never disappears behind instructions. The renderer owns the
+alternate screen and is destroyed in `finally`, restoring the terminal after
+normal exit, supported signals, setup/runtime errors, or daemon disconnect.
+Noninteractive commands are the accessible/scriptable equivalent of every view.
 
 ### Native service and overlay companions
 

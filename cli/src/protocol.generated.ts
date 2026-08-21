@@ -1,5 +1,5 @@
 // @generated from schemas/protocol/openwhisper.schema.json; do not edit by hand.
-export const SCHEMA_SHA256 = "2797cbaa16bb54eb323d54ab276cfd0a8b6a98b176d4dfde55d82ca37d12d0d6";
+export const SCHEMA_SHA256 = "c29f39bc3760ad91c5c300c870828453a49357d70d54786e159cac2a2980b58f";
 export const CURRENT_PROTOCOL_VERSION = 3;
 export const PREVIOUS_PROTOCOL_VERSION = 2;
 export const MAX_FRAME_BYTES = 8 * 1024 * 1024;
@@ -65,18 +65,26 @@ export interface SystemStatus {
   daemon: string; version: string; protocol: number; capture: CaptureState; capture_available: boolean;
   blockers: ReadinessBlocker[]; mode: TranscriptMode; language: Language; local_only: boolean;
   audio_backend?: string; model?: string; model_installing?: boolean;
+  requested_backend?: "auto" | "vulkan" | "cpu"; actual_backend?: "vulkan" | "cpu" | "unavailable";
+  gpu_device?: string | null; backend_fallback_reason?: string | null; streaming?: JsonValue;
+  backend_error?: string | null; model_verification?: "missing" | "verified" | "corrupt" | "installing";
+  benchmark_status?: "not_run";
 }
+export type InsertionStatus = "not_requested" | "active" | "complete" | "suspended" | "partial" | "failed";
 export interface TranscriptionResult {
   session_id: string; generation: number; raw_text: string; final_text: string; language: Language;
   mode: TranscriptMode; duration_ms: number; source: TranscriptionSource; history_id: string | null;
-  inserted: false; copied: boolean; insertion_method: "clipboard"; warnings: string[];
+  inserted: boolean; inserted_bytes: number; insertion_status: InsertionStatus; copied: boolean; insertion_method: string;
+  requested_backend: "auto" | "vulkan" | "cpu" | "unknown"; actual_backend: "vulkan" | "cpu" | "unknown";
+  gpu_device?: string; backend_fallback_reason?: string; streaming_latency_ms: number; warnings: string[];
 }
 export type ModelTrust = "builtin_pinned";
 export type BenchmarkStatus = "not_run";
 export interface ModelInfo {
   name: string; model_id: string; installed: boolean; selected: boolean; installing: boolean;
   trust: ModelTrust; benchmark_status: BenchmarkStatus; source: string; license: string;
-  size_bytes: number; sha256: string; worker_abi: string; path?: string;
+  size_bytes: number; sha256: string; worker_abi: string; artifact_name: string; pinned_revision: string;
+  verification_state: "missing" | "verified" | "corrupt" | "installing"; path?: string;
 }
 export interface ModelDownloadProgress { name: string; downloaded_bytes: number; total_bytes: number }
 
@@ -100,7 +108,8 @@ export function decodeSystemStatus(value: unknown): SystemStatus {
 export function decodeTranscriptionResult(value: unknown): TranscriptionResult {
   const item = record(value, "transcription result");
   for (const key of ["session_id", "raw_text", "final_text", "insertion_method"]) if (typeof item[key] !== "string") throw new Error(`Invalid ${key}`);
-  if (typeof item.generation !== "number" || typeof item.duration_ms !== "number" || typeof item.copied !== "boolean" || item.inserted !== false || !Array.isArray(item.warnings)) throw new Error("Invalid transcription result fields");
+  if (typeof item.generation !== "number" || typeof item.duration_ms !== "number" || typeof item.copied !== "boolean" || typeof item.inserted !== "boolean" || typeof item.inserted_bytes !== "number" || typeof item.streaming_latency_ms !== "number" || !Array.isArray(item.warnings)) throw new Error("Invalid transcription result fields");
+  oneOf(item.insertion_status, ["not_requested", "active", "complete", "suspended", "partial", "failed"], "insertion status");
   oneOf(item.language, ["auto", "ar", "en"], "language"); oneOf(item.mode, ["raw", "clean", "code"], "mode"); oneOf(item.source, ["microphone", "file", "stdin"], "source");
   return item as unknown as TranscriptionResult;
 }

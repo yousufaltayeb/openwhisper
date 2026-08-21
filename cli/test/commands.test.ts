@@ -58,6 +58,13 @@ describe("stable command contract", () => {
     } finally { await Bun.file(path).delete(); }
   });
 
+  test("parses safe live recording and constrains all built-in model profiles", () => {
+    expect(parseCommand(["record", "start", "--insert-live"]).params).toEqual({ insert_live: true });
+    expect(parseCommand(["record", "toggle", "--mode", "code", "--insert-live"]).params).toEqual({ mode: "code", insert_live: true });
+    expect(parseCommand(["models", "select", "accurate"]).params).toEqual({ name: "accurate" });
+    expect(() => parseCommand(["models", "verify", "mystery"])).toThrow(OpenWhisperError);
+  });
+
   test("centralizes all TypeScript runtime paths", () => {
     expect(runtimePaths({ XDG_CONFIG_HOME: "/c", XDG_DATA_HOME: "/d", XDG_CACHE_HOME: "/k", XDG_RUNTIME_DIR: "/r" }, "/home/test")).toEqual({
       config: "/c/openwhisper/v1", data: "/d/openwhisper/v1", cache: "/k/openwhisper/v1",

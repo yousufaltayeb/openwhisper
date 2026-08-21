@@ -5,21 +5,26 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use base64::Engine;
 use openwhisper_core::audio::{ActiveCapture, cleanup_stale_sessions};
 use openwhisper_core::models::{
-    BuiltinModelManifest, DownloadOptions, ModelError, builtin_balanced_model, download_model,
-    quarantine_file, verify_file,
+    BuiltinModelManifest, DownloadOptions, ModelError, builtin_model, builtin_models,
+    download_model, quarantine_file, verify_file,
 };
 use openwhisper_core::processing::TextProcessor;
+use openwhisper_core::streaming::STREAM_BATCH_BYTES;
 use openwhisper_core::{
-    AppConfig, AppPaths, CaptureCoordinator, HistoryInput, InstalledModel, Mode, StateStore,
-    detect_capabilities,
+    AppConfig, AppPaths, CaptureCoordinator, HistoryInput, InferenceBackend, InstalledModel, Mode,
+    OverlayMode, StateStore, TranscriptStabilizer, detect_capabilities,
 };
 use openwhisper_protocol::{
-    BenchmarkStatus, ErrorCode, Language, ModelDownloadProgress, ModelInfo, ModelTrust, RpcError,
-    ServerMessage, TranscriptMode, TranscriptionResult, TranscriptionSource,
+    BenchmarkStatus, ErrorCode, InsertionStatus, Language, ModelDownloadProgress, ModelInfo,
+    ModelTrust, RpcError, ServerMessage, TranscriptMode, TranscriptionResult, TranscriptionSource,
 };
-use openwhisper_worker_native::{WORKER_ABI, WorkerCommand, WorkerRequest, WorkerResponse};
+use openwhisper_worker_native::{
+    BackendReport, WORKER_ABI, WorkerBackend, WorkerCommand, WorkerRequest, WorkerResponse,
+    decode_pcm_wav, resolve_backend,
+};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, Notify, broadcast};
 use tokio::task::JoinHandle;
@@ -42,6 +47,7 @@ pub struct DaemonState {
     model_install_lock: Arc<AsyncMutex<()>>,
     model_progress: Arc<Mutex<Option<ModelDownloadProgress>>>,
     verified_model_fingerprints: Arc<Mutex<HashMap<String, (u64, Option<SystemTime>)>>>,
+    backend_probe: Arc<Mutex<Option<(InferenceBackend, Result<BackendReport, String>)>>>,
     #[cfg(any(test, feature = "test-capture"))]
     test_capture: bool,
     sequence: Arc<AtomicU64>,
@@ -51,7 +57,37 @@ pub struct DaemonState {
 
 struct RuntimeOwner {
     recorder: Option<ActiveCapture>,
+    level_monitor: Option<JoinHandle<()>>,
+    stream_task: Option<JoinHandle<()>>,
+    live_transcript: Option<Arc<Mutex<LiveTranscript>>>,
     worker: Option<WorkerSupervisor>,
+}
+
+#[derive(Debug)]
+struct LiveTranscript {
+    stabilizer: TranscriptStabilizer,
+    processor: Option<openwhisper_core::StreamingTextProcessor>,
+    target: Option<openwhisper_core::DeliveryTarget>,
+    insertion_status: String,
+    inserted_bytes: u64,
+    language: String,
+    latency_ms: u64,
+    backend: Option<BackendReport>,
+}
+
+impl Default for LiveTranscript {
+    fn default() -> Self {
+        Self {
+            stabilizer: TranscriptStabilizer::default(),
+            processor: None,
+            target: None,
+            insertion_status: "not_requested".into(),
+            inserted_bytes: 0,
+            language: String::new(),
+            latency_ms: 0,
+            backend: None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -74,6 +110,9 @@ impl DaemonState {
             capture: Arc::new(Mutex::new(CaptureCoordinator::default())),
             runtime: Arc::new(AsyncMutex::new(RuntimeOwner {
                 recorder: None,
+                level_monitor: None,
+                stream_task: None,
+                live_transcript: None,
                 worker: None,
             })),
             processing: Arc::new(Mutex::new(None)),
@@ -83,6 +122,7 @@ impl DaemonState {
             model_install_lock: Arc::new(AsyncMutex::new(())),
             model_progress: Arc::new(Mutex::new(None)),
             verified_model_fingerprints: Arc::new(Mutex::new(HashMap::new())),
+            backend_probe: Arc::new(Mutex::new(None)),
             #[cfg(any(test, feature = "test-capture"))]
             test_capture: cfg!(test),
             sequence: Arc::new(AtomicU64::new(0)),
@@ -107,6 +147,27 @@ impl DaemonState {
         let config = self.config.read().expect("config state poisoned").clone();
         let blockers = self.readiness_blockers();
         let capabilities = detect_capabilities();
+        let backend = self.backend_report(config.model.backend);
+        let live = self.runtime.try_lock().ok().and_then(|runtime| {
+            runtime.live_transcript.as_ref().and_then(|live| {
+                live.lock().ok().map(|live| {
+                    json!({
+                        "preview": live.stabilizer.preview(),
+                        "committed": live.stabilizer.committed(),
+                        "latency_ms": live.latency_ms,
+                        "backend": live.backend,
+                    })
+                })
+            })
+        });
+        let live_backend = live
+            .as_ref()
+            .and_then(|live| live.get("backend"))
+            .and_then(Value::as_object);
+        let selected_model = self
+            .model_list()
+            .ok()
+            .and_then(|models| models.into_iter().find(|model| model.selected));
         json!({
             "daemon": "running",
             "version": env!("CARGO_PKG_VERSION"),
@@ -116,6 +177,24 @@ impl DaemonState {
             "blockers": blockers,
             "audio_backend": capabilities.audio.backend,
             "model": config.model.selected,
+            "model_verification": selected_model.as_ref().map(|model| model.verification_state.as_str()).unwrap_or("missing"),
+            "benchmark_status": selected_model.as_ref().map(|_| "not_run").unwrap_or("not_run"),
+            "requested_backend": config.model.backend,
+            "actual_backend": live_backend
+                .and_then(|backend| backend.get("actual"))
+                .and_then(Value::as_str)
+                .or_else(|| backend.as_ref().ok().map(|report| report.actual.as_str()))
+                .unwrap_or("unavailable"),
+            "gpu_device": live_backend
+                .and_then(|backend| backend.get("device_name"))
+                .and_then(Value::as_str)
+                .or_else(|| backend.as_ref().ok().and_then(|report| report.device_name.as_deref())),
+            "backend_fallback_reason": live_backend
+                .and_then(|backend| backend.get("fallback_reason"))
+                .and_then(Value::as_str)
+                .or_else(|| backend.as_ref().ok().and_then(|report| report.fallback_reason.as_deref())),
+            "backend_error": backend.as_ref().err(),
+            "streaming": live,
             "mode": config.mode,
             "language": config.language,
             "local_only": config.privacy.local_only,
@@ -123,19 +202,44 @@ impl DaemonState {
         })
     }
 
+    fn backend_report(&self, requested: InferenceBackend) -> Result<BackendReport, String> {
+        if let Ok(cache) = self.backend_probe.lock()
+            && let Some((cached_requested, report)) = cache.as_ref()
+            && *cached_requested == requested
+        {
+            return report.clone();
+        }
+        let report = resolve_backend(worker_backend(requested)).map_err(|error| error.to_string());
+        if let Ok(mut cache) = self.backend_probe.lock() {
+            *cache = Some((requested, report.clone()));
+        }
+        report
+    }
+
     pub async fn dispatch(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
             "system.status" | "record.status" => Ok(self.status()),
-            "system.doctor" => Ok(json!({
-                "capabilities": detect_capabilities(),
-                "blockers": self.readiness_blockers(),
-                "legacy": self.paths.detect_legacy(),
-                "data": {
-                    "config": self.paths.config_file(),
-                    "state": self.paths.state_file(),
-                    "versioned": true
-                }
-            })),
+            "system.doctor" => {
+                let status = self.status();
+                Ok(json!({
+                    "capabilities": detect_capabilities(),
+                    "blockers": self.readiness_blockers(),
+                    "inference": {
+                        "requested_backend": status.get("requested_backend"),
+                        "actual_backend": status.get("actual_backend"),
+                        "gpu_device": status.get("gpu_device"),
+                        "fallback_reason": status.get("backend_fallback_reason"),
+                        "selected_profile": status.get("model"),
+                        "benchmark_status": "not_run",
+                    },
+                    "legacy": self.paths.detect_legacy(),
+                    "data": {
+                        "config": self.paths.config_file(),
+                        "state": self.paths.state_file(),
+                        "versioned": true
+                    }
+                }))
+            }
             "system.shutdown" => {
                 self.shutdown.notify_waiters();
                 Ok(json!({"stopping": true}))
@@ -219,7 +323,7 @@ impl DaemonState {
             "snippets.import" | "snippets.export" => Err(unsupported("snippet file import/export is not linked in this alpha build", "Use snippets list/add/remove commands.")),
             "config.list" => Ok(serde_json::to_value(self.config.read().expect("config poisoned").clone()).map_err(internal)?),
             "config.get" => self.config_get(params),
-            "config.set" => self.config_set(params),
+            "config.set" => self.config_set(params).await,
             "models.list" => Ok(json!(self.model_list()?)),
             "models.import" => self.model_import(params).await,
             "models.install" => self.model_install(params).await,
@@ -247,13 +351,36 @@ impl DaemonState {
     }
 
     async fn record_start(&self, params: Value) -> Result<Value, RpcError> {
-        reject_unknown_params(&params, &["mode"])?;
+        reject_unknown_params(&params, &["mode", "insert_live"])?;
         let mode = params
             .get("mode")
             .and_then(Value::as_str)
             .map(parse_mode)
             .transpose()?
             .unwrap_or_else(|| self.config.read().expect("config poisoned").mode);
+        let insertion_requested = params
+            .get("insert_live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && self
+                .config
+                .read()
+                .map_err(|_| internal("config state is poisoned"))?
+                .delivery
+                .live_insert;
+        let target = if insertion_requested {
+            Some(
+                openwhisper_core::clipboard::capture_x11_target()
+                    .await
+                    .map_err(|error| {
+                        RpcError::new(ErrorCode::InsertionFailed, error.to_string()).with_action(
+                            "Focus an X11 target and retry, or record without --insert-live.",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
         {
             let capture = self
                 .capture
@@ -286,7 +413,7 @@ impl DaemonState {
                 .lock()
                 .map_err(|_| internal("capture state is poisoned"))?;
             let id = capture
-                .start_session(session_id, mode, None)
+                .start_session(session_id, mode, target.clone())
                 .map_err(conflict)?;
             let state = serde_json::to_value(capture.state()).map_err(internal)?;
             let generation = capture.sequence();
@@ -302,9 +429,83 @@ impl DaemonState {
             }
         };
         if let Some(recorder) = recorder {
-            self.runtime.lock().await.recorder = Some(recorder);
+            let mut levels = recorder.subscribe_levels();
+            let pcm = recorder.subscribe_pcm();
+            let level_state = self.clone();
+            let level_monitor =
+                tokio::spawn(async move {
+                    let recording_started = Instant::now();
+                    let mut last_notification = Instant::now() - Duration::from_secs(1);
+                    while levels.changed().await.is_ok() {
+                        let active_generation =
+                            level_state.capture.lock().ok().and_then(|capture| {
+                                match capture.state() {
+                                    openwhisper_core::CaptureState::Capturing {
+                                        generation: active,
+                                        ..
+                                    } => Some(*active),
+                                    _ => None,
+                                }
+                            });
+                        if active_generation != Some(generation) {
+                            break;
+                        }
+                        let level = *levels.borrow_and_update();
+                        level_state.emit(
+                            "recording.level",
+                            json!({
+                                "generation": generation,
+                                "dbfs": level.dbfs,
+                                "peak_dbfs": level.peak_dbfs,
+                                "signal": level.signal,
+                                "clipping": level.clipping,
+                                "bytes_captured": level.bytes_captured,
+                            }),
+                        );
+                        if last_notification.elapsed() >= Duration::from_millis(500)
+                            && level_state
+                                .config
+                                .read()
+                                .ok()
+                                .is_some_and(|config| config.notifications)
+                        {
+                            last_notification = Instant::now();
+                            update_recording_notification(level, recording_started.elapsed()).await;
+                        }
+                    }
+                });
+            let mut runtime = self.runtime.lock().await;
+            runtime.recorder = Some(recorder);
+            if let Some(previous) = runtime.level_monitor.replace(level_monitor) {
+                previous.abort();
+            }
+            drop(runtime);
+            if let Err(error) = self
+                .start_streaming_transcription(generation, mode, target, pcm)
+                .await
+            {
+                let recorder = self.runtime.lock().await.recorder.take();
+                if let Some(recorder) = recorder {
+                    recorder.cancel().await;
+                }
+                if let Ok(mut capture) = self.capture.lock() {
+                    capture.fail(error.message.clone());
+                }
+                return Err(error);
+            }
         }
         self.emit("recording.changed", state);
+        self.emit(
+            "recording.level",
+            json!({
+                "generation": generation,
+                "dbfs": -60.0,
+                "peak_dbfs": -60.0,
+                "signal": false,
+                "clipping": false,
+                "bytes_captured": 0,
+            }),
+        );
         let maximum = self
             .config
             .read()
@@ -326,6 +527,297 @@ impl DaemonState {
             }
         });
         Ok(json!({"session_id": id, "generation": generation, "state": "capturing"}))
+    }
+
+    async fn start_streaming_transcription(
+        &self,
+        generation: u64,
+        mode: Mode,
+        target: Option<openwhisper_core::DeliveryTarget>,
+        mut pcm: tokio::sync::watch::Receiver<openwhisper_core::audio::PcmSnapshot>,
+    ) -> Result<(), RpcError> {
+        let config = self
+            .config
+            .read()
+            .map_err(|_| internal("config state is poisoned"))?
+            .clone();
+        let installed = self
+            .store
+            .installed_model(&config.model.selected)
+            .map_err(internal)?
+            .ok_or_else(|| {
+                RpcError::new(ErrorCode::ModelUnavailable, "selected model is missing")
+            })?;
+        let start_command = WorkerCommand::StreamStart {
+            model_path: installed.path,
+            language: config.language.clone(),
+            backend: worker_backend(config.model.backend),
+        };
+        let start_request = WorkerRequest {
+            id: Uuid::new_v4(),
+            generation,
+            command: start_command.clone(),
+        };
+        let report = {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.worker.is_none() {
+                runtime.worker = Some(
+                    WorkerSupervisor::spawn_with_threads(
+                        self.paths.worker_executable(),
+                        config.model.threads,
+                    )
+                    .await
+                    .map_err(worker_rpc_error)?,
+                );
+            }
+            match runtime
+                .worker
+                .as_mut()
+                .expect("worker initialized")
+                .request(&start_request, Duration::from_secs(30))
+                .await
+                .map_err(worker_rpc_error)?
+            {
+                WorkerResponse::StreamStarted { backend, .. } => backend,
+                WorkerResponse::Error { code, message, .. } => {
+                    let mut error = RpcError::new(ErrorCode::ModelUnavailable, message);
+                    error.detail = Some(code);
+                    return Err(error);
+                }
+                _ => {
+                    return Err(RpcError::new(
+                        ErrorCode::Protocol,
+                        "worker rejected stream_start",
+                    ));
+                }
+            }
+        };
+        let replacements = self
+            .store
+            .list_strings("replacements")
+            .map_err(internal)?
+            .into_iter()
+            .filter_map(|(from, to)| to.map(|to| (from, to)))
+            .collect();
+        let live = Arc::new(Mutex::new(LiveTranscript {
+            backend: Some(report.clone()),
+            processor: Some(openwhisper_core::StreamingTextProcessor::new(
+                mode,
+                replacements,
+            )),
+            insertion_status: if target.is_some() {
+                "active"
+            } else {
+                "not_requested"
+            }
+            .into(),
+            target,
+            ..LiveTranscript::default()
+        }));
+        self.emit("insertion.state", json!({
+            "generation": generation,
+            "status": live.lock().ok().map(|live| live.insertion_status.clone()).unwrap_or_else(|| "failed".into()),
+        }));
+        self.emit(
+            "backend.changed",
+            json!({
+                "generation": generation,
+                "requested": report.requested,
+                "actual": report.actual,
+                "device_name": report.device_name,
+                "fallback_reason": report.fallback_reason,
+            }),
+        );
+
+        let state = self.clone();
+        let live_for_task = live.clone();
+        let task = tokio::spawn(async move {
+            let mut last_sequence = 0_u64;
+            let mut last_total_bytes = 0_u64;
+            let mut crash_recovered = false;
+            while pcm.changed().await.is_ok() {
+                let snapshot = pcm.borrow_and_update().clone();
+                if snapshot.sequence == last_sequence
+                    || snapshot.total_bytes <= last_total_bytes
+                    || snapshot.pcm.len() < STREAM_BATCH_BYTES
+                {
+                    continue;
+                }
+                last_sequence = snapshot.sequence;
+                let appended_bytes = snapshot.total_bytes.saturating_sub(last_total_bytes) as usize;
+                let chunk_start = snapshot.pcm.len().saturating_sub(appended_bytes);
+                let chunk = &snapshot.pcm[chunk_start..];
+                if chunk.len() < STREAM_BATCH_BYTES {
+                    continue;
+                }
+                last_total_bytes = snapshot.total_bytes;
+                let append = WorkerRequest {
+                    id: Uuid::new_v4(),
+                    generation,
+                    command: WorkerCommand::StreamAppend {
+                        pcm_base64: base64::engine::general_purpose::STANDARD.encode(chunk),
+                    },
+                };
+                let response = {
+                    let mut runtime = state.runtime.lock().await;
+                    let Some(worker) = runtime.worker.as_mut() else {
+                        break;
+                    };
+                    match worker.request(&append, Duration::from_secs(120)).await {
+                        Ok(response) => Ok(response),
+                        Err(SupervisorError::Crashed) | Err(SupervisorError::Io(_))
+                            if !crash_recovered =>
+                        {
+                            crash_recovered = true;
+                            let replay = async {
+                                worker.restart().await?;
+                                let replay_start = WorkerRequest {
+                                    id: Uuid::new_v4(),
+                                    generation,
+                                    command: start_command.clone(),
+                                };
+                                worker
+                                    .request(&replay_start, Duration::from_secs(30))
+                                    .await?;
+                                let replay = WorkerRequest {
+                                    id: Uuid::new_v4(),
+                                    generation,
+                                    command: WorkerCommand::StreamAppend {
+                                        pcm_base64: base64::engine::general_purpose::STANDARD
+                                            .encode(&snapshot.pcm),
+                                    },
+                                };
+                                worker.request(&replay, Duration::from_secs(120)).await
+                            };
+                            replay.await
+                        }
+                        Err(error) => Err(error),
+                    }
+                };
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        state.emit(
+                            "transcription.streaming_failed",
+                            json!({
+                                "generation": generation,
+                                "message": error.to_string(),
+                            }),
+                        );
+                        break;
+                    }
+                };
+                match response {
+                    WorkerResponse::StreamHypothesis {
+                        text,
+                        language,
+                        latency_ms,
+                        backend,
+                        ..
+                    } => {
+                        let update = {
+                            let Ok(mut live) = live_for_task.lock() else {
+                                break;
+                            };
+                            live.language = language.clone();
+                            live.latency_ms = latency_ms;
+                            live.backend = Some(backend.clone());
+                            live.stabilizer.update(&text)
+                        };
+                        state.emit(
+                            "transcription.preview",
+                            json!({
+                                "generation": generation,
+                                "text": update.preview,
+                                "language": language,
+                                "latency_ms": latency_ms,
+                            }),
+                        );
+                        if !update.committed_delta.is_empty() {
+                            state.emit(
+                                "transcription.commit",
+                                json!({
+                                    "generation": generation,
+                                    "delta": update.committed_delta,
+                                    "committed": update.committed,
+                                }),
+                            );
+                            let (processed_delta, target, active) = {
+                                let Ok(mut live) = live_for_task.lock() else {
+                                    break;
+                                };
+                                let processed_delta = live
+                                    .processor
+                                    .as_mut()
+                                    .map(|processor| processor.push(&update.committed_delta))
+                                    .unwrap_or_default();
+                                (
+                                    processed_delta,
+                                    live.target.clone(),
+                                    live.insertion_status == "active",
+                                )
+                            };
+                            if active && !processed_delta.is_empty() {
+                                let insertion = match target {
+                                    Some(target) => openwhisper_core::clipboard::insert_x11_delta(
+                                        &target,
+                                        &processed_delta,
+                                    )
+                                    .await,
+                                    None => Err(openwhisper_core::clipboard::ClipboardError::InsertionUnavailable),
+                                };
+                                match insertion {
+                                    Ok(()) => {
+                                        if let Ok(mut live) = live_for_task.lock() {
+                                            live.inserted_bytes += processed_delta.len() as u64;
+                                        }
+                                        state.emit(
+                                            "insertion.state",
+                                            json!({
+                                                "generation": generation,
+                                                "status": "active",
+                                                "inserted_bytes": processed_delta.len(),
+                                            }),
+                                        );
+                                    }
+                                    Err(error) => {
+                                        if let Ok(mut live) = live_for_task.lock() {
+                                            live.insertion_status = "suspended".into();
+                                        }
+                                        state.emit(
+                                            "insertion.state",
+                                            json!({
+                                                "generation": generation,
+                                                "status": "suspended",
+                                                "reason": error.to_string(),
+                                            }),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    WorkerResponse::Error { code, message, .. } => {
+                        state.emit(
+                            "transcription.streaming_failed",
+                            json!({
+                                "generation": generation,
+                                "code": code,
+                                "message": message,
+                            }),
+                        );
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+        let mut runtime = self.runtime.lock().await;
+        if let Some(previous) = runtime.stream_task.replace(task) {
+            previous.abort();
+        }
+        runtime.live_transcript = Some(live);
+        Ok(())
     }
 
     async fn record_stop(&self, params: Value) -> Result<Value, RpcError> {
@@ -354,32 +846,34 @@ impl DaemonState {
                 json!({"session_id": session_id, "generation": generation, "state": "transcribing", "accepted": true}),
             );
         }
-        let recorder = self
-            .runtime
-            .lock()
-            .await
-            .recorder
-            .take()
-            .ok_or_else(|| internal("active recorder is missing"))?;
+        let (recorder, level_monitor, stream_task, live_transcript) = {
+            let mut runtime = self.runtime.lock().await;
+            (
+                runtime
+                    .recorder
+                    .take()
+                    .ok_or_else(|| internal("active recorder is missing"))?,
+                runtime.level_monitor.take(),
+                runtime.stream_task.take(),
+                runtime.live_transcript.take(),
+            )
+        };
+        if let Some(stream_task) = stream_task {
+            stream_task.abort();
+            let _ = stream_task.await;
+            let mut runtime = self.runtime.lock().await;
+            if let Some(worker) = runtime.worker.as_mut() {
+                worker.restart().await.map_err(worker_rpc_error)?;
+            }
+        }
         let audio_path = recorder.stop().await.map_err(audio_rpc_error)?;
-        let copy = self
-            .config
-            .read()
-            .map_err(|_| internal("config state is poisoned"))?
-            .delivery
-            .clipboard;
+        if let Some(level_monitor) = level_monitor {
+            level_monitor.abort();
+        }
         let state = self.clone();
         let task = tokio::spawn(async move {
             state
-                .process_recording(
-                    session_id,
-                    generation,
-                    mode,
-                    audio_path,
-                    TranscriptionSource::Microphone,
-                    copy,
-                    None,
-                )
+                .finish_stream_recording(session_id, generation, mode, audio_path, live_transcript)
                 .await;
         });
         if let Some(previous) = self
@@ -402,7 +896,7 @@ impl DaemonState {
     }
 
     async fn record_toggle(&self, params: Value) -> Result<Value, RpcError> {
-        reject_unknown_params(&params, &["mode"])?;
+        reject_unknown_params(&params, &["mode", "insert_live"])?;
         let phase = self
             .capture
             .lock()
@@ -433,6 +927,17 @@ impl DaemonState {
             task.abort();
         }
         let mut runtime = self.runtime.lock().await;
+        if let Some(level_monitor) = runtime.level_monitor.take() {
+            level_monitor.abort();
+        }
+        if let Some(stream_task) = runtime.stream_task.take() {
+            stream_task.abort();
+        }
+        let inserted_bytes = runtime
+            .live_transcript
+            .take()
+            .and_then(|live| live.lock().ok().map(|live| live.inserted_bytes))
+            .unwrap_or(0);
         if let Some(recorder) = runtime.recorder.take() {
             recorder.cancel().await;
         }
@@ -441,7 +946,27 @@ impl DaemonState {
         }
         drop(runtime);
         self.emit("recording.changed", json!({"phase": "idle"}));
-        Ok(json!({"cancelled": true}))
+        self.emit(
+            "insertion.state",
+            json!({
+                "status": if inserted_bytes > 0 { "partial" } else { "not_requested" },
+                "inserted_bytes": inserted_bytes,
+                "warning": if inserted_bytes > 0 {
+                    Some("Already inserted text cannot be retracted.")
+                } else {
+                    None
+                },
+            }),
+        );
+        Ok(json!({
+            "cancelled": true,
+            "inserted_bytes": inserted_bytes,
+            "warning": if inserted_bytes > 0 {
+                Some("Already inserted text cannot be retracted.")
+            } else {
+                None
+            },
+        }))
     }
 
     fn record_result(&self, params: Value) -> Result<Value, RpcError> {
@@ -539,6 +1064,549 @@ impl DaemonState {
         }
     }
 
+    async fn finish_stream_recording(
+        &self,
+        session_id: Uuid,
+        generation: u64,
+        mode: Mode,
+        audio_path: PathBuf,
+        live_transcript: Option<Arc<Mutex<LiveTranscript>>>,
+    ) {
+        let outcome = self
+            .finish_stream_and_deliver(
+                session_id,
+                generation,
+                mode,
+                &audio_path,
+                live_transcript.clone(),
+            )
+            .await;
+        if let Err(error) = outcome {
+            let partial = live_transcript.as_ref().and_then(|live| {
+                live.lock().ok().and_then(|live| {
+                    (live.inserted_bytes > 0).then(|| {
+                        (
+                            live.stabilizer.committed(),
+                            live.processor
+                                .as_ref()
+                                .map(|processor| processor.final_text().to_owned())
+                                .unwrap_or_default(),
+                            live.language.clone(),
+                            live.inserted_bytes,
+                        )
+                    })
+                })
+            });
+            if let Some((raw_text, inserted_text, language, inserted_bytes)) = partial {
+                let marked = format!(
+                    "[PARTIAL — finalization failed; {} bytes were already inserted]\n{}",
+                    inserted_bytes, inserted_text
+                );
+                let config = self.config.read().ok().map(|config| config.clone());
+                let duration_ms = std::fs::metadata(&audio_path)
+                    .map(|meta| meta.len().saturating_sub(44) * 1000 / 32_000)
+                    .unwrap_or(0);
+                let history_id = config
+                    .as_ref()
+                    .filter(|config| config.history.enabled)
+                    .and_then(|_| {
+                        self.store
+                            .add_history(HistoryInput {
+                                raw_text: raw_text.clone(),
+                                final_text: marked.clone(),
+                                mode,
+                                language: language.clone(),
+                                duration_ms,
+                                inserted: true,
+                                source: "microphone_partial".into(),
+                            })
+                            .ok()
+                            .map(|entry| entry.id)
+                    });
+                let copied = openwhisper_core::clipboard::copy_text(&marked)
+                    .await
+                    .is_ok();
+                let result = TranscriptionResult {
+                    session_id,
+                    generation,
+                    raw_text,
+                    final_text: marked,
+                    language: protocol_language(&language),
+                    mode: protocol_mode(mode),
+                    duration_ms,
+                    source: TranscriptionSource::Microphone,
+                    history_id,
+                    inserted: true,
+                    inserted_bytes,
+                    insertion_status: InsertionStatus::Partial,
+                    copied,
+                    insertion_method: "partial".into(),
+                    requested_backend: config
+                        .as_ref()
+                        .map(|config| inference_backend_name(config.model.backend).into())
+                        .unwrap_or_else(|| "unknown".into()),
+                    actual_backend: "unknown".into(),
+                    gpu_device: None,
+                    backend_fallback_reason: None,
+                    streaming_latency_ms: 0,
+                    warnings: vec![format!(
+                        "Finalization failed after live insertion: {}. Already inserted text cannot be retracted.",
+                        error.message
+                    )],
+                };
+                if let Ok(mut results) = self.results.lock() {
+                    results.insert(
+                        session_id,
+                        CachedResult {
+                            completed_at: Instant::now(),
+                            result,
+                        },
+                    );
+                }
+                if let Ok(mut capture) = self.capture.lock() {
+                    capture.fail("partial transcript preserved after finalization failure");
+                }
+                if let Ok(mut waiters) = self.result_ready.lock()
+                    && let Some(notify) = waiters.remove(&session_id)
+                {
+                    notify.notify_waiters();
+                }
+                self.emit(
+                    "insertion.state",
+                    json!({
+                        "generation": generation,
+                        "status": "partial",
+                        "inserted_bytes": inserted_bytes,
+                    }),
+                );
+                self.emit(
+                    "result.available",
+                    json!({"session_id": session_id, "generation": generation, "partial": true}),
+                );
+                if let Some(directory) = audio_path.parent() {
+                    let _ = tokio::fs::remove_dir_all(directory).await;
+                }
+                return;
+            }
+            if let Ok(mut capture) = self.capture.lock()
+                && capture.sequence() == generation
+            {
+                capture.fail(error.message.clone());
+            }
+            self.emit(
+                "recording.changed",
+                json!({
+                    "phase": "failed",
+                    "session_id": session_id,
+                    "generation": generation,
+                    "message": error.message.clone(),
+                }),
+            );
+            if let Ok(mut errors) = self.result_errors.lock() {
+                errors.insert(session_id, (Instant::now(), error));
+            }
+            if let Ok(mut waiters) = self.result_ready.lock()
+                && let Some(notify) = waiters.remove(&session_id)
+            {
+                notify.notify_waiters();
+            }
+        }
+        if let Some(directory) = audio_path.parent() {
+            let _ = tokio::fs::remove_dir_all(directory).await;
+        }
+    }
+
+    async fn finish_stream_and_deliver(
+        &self,
+        session_id: Uuid,
+        generation: u64,
+        mode: Mode,
+        audio_path: &std::path::Path,
+        live_transcript: Option<Arc<Mutex<LiveTranscript>>>,
+    ) -> Result<(), RpcError> {
+        let config = self
+            .config
+            .read()
+            .map_err(|_| internal("config state is poisoned"))?
+            .clone();
+        let installed = self
+            .store
+            .installed_model(&config.model.selected)
+            .map_err(internal)?
+            .ok_or_else(|| {
+                RpcError::new(ErrorCode::ModelUnavailable, "selected model is missing")
+            })?;
+        let mut samples = decode_pcm_wav(audio_path)
+            .map_err(|error| RpcError::new(ErrorCode::TranscriptionFailed, error.to_string()))?;
+        let max_samples = openwhisper_worker_native::MAX_STREAM_SAMPLES;
+        if samples.len() > max_samples {
+            samples.drain(..samples.len() - max_samples);
+        }
+        let pcm_bytes = samples
+            .into_iter()
+            .map(|sample| (sample.clamp(-1.0, 1.0) * 32768.0).round() as i16)
+            .flat_map(i16::to_le_bytes)
+            .collect::<Vec<_>>();
+        let start_command = WorkerCommand::StreamStart {
+            model_path: installed.path,
+            language: config.language.clone(),
+            backend: worker_backend(config.model.backend),
+        };
+        let append = WorkerRequest {
+            id: Uuid::new_v4(),
+            generation,
+            command: WorkerCommand::StreamAppend {
+                pcm_base64: base64::engine::general_purpose::STANDARD.encode(pcm_bytes),
+            },
+        };
+        let response = {
+            let mut runtime = self.runtime.lock().await;
+            if runtime.worker.is_none() {
+                runtime.worker = Some(
+                    WorkerSupervisor::spawn_with_threads(
+                        self.paths.worker_executable(),
+                        config.model.threads,
+                    )
+                    .await
+                    .map_err(worker_rpc_error)?,
+                );
+                let start = WorkerRequest {
+                    id: Uuid::new_v4(),
+                    generation,
+                    command: start_command.clone(),
+                };
+                runtime
+                    .worker
+                    .as_mut()
+                    .expect("worker initialized")
+                    .request(&start, Duration::from_secs(30))
+                    .await
+                    .map_err(worker_rpc_error)?;
+            }
+            let worker = runtime.worker.as_mut().expect("worker initialized");
+            let mut recovered = false;
+            loop {
+                match worker.request(&append, Duration::from_secs(120)).await {
+                    Ok(WorkerResponse::Error { code, .. })
+                        if code == "stream_inactive" && !recovered =>
+                    {
+                        recovered = true;
+                        let start = WorkerRequest {
+                            id: Uuid::new_v4(),
+                            generation,
+                            command: start_command.clone(),
+                        };
+                        worker
+                            .request(&start, Duration::from_secs(30))
+                            .await
+                            .map_err(worker_rpc_error)?;
+                    }
+                    Ok(response) => break response,
+                    Err(SupervisorError::Crashed) | Err(SupervisorError::Io(_)) if !recovered => {
+                        recovered = true;
+                        worker.restart().await.map_err(worker_rpc_error)?;
+                        let start = WorkerRequest {
+                            id: Uuid::new_v4(),
+                            generation,
+                            command: start_command.clone(),
+                        };
+                        worker
+                            .request(&start, Duration::from_secs(30))
+                            .await
+                            .map_err(worker_rpc_error)?;
+                    }
+                    Err(error) => return Err(worker_rpc_error(error)),
+                }
+            }
+        };
+        let (hypothesis, language, latency_ms, backend) = match response {
+            WorkerResponse::StreamHypothesis {
+                text,
+                language,
+                latency_ms,
+                backend,
+                ..
+            } => (text, language, latency_ms, backend),
+            WorkerResponse::Error { code, message, .. } => {
+                let mut error = RpcError::new(ErrorCode::TranscriptionFailed, message);
+                error.detail = Some(code);
+                return Err(error);
+            }
+            _ => {
+                return Err(RpcError::new(
+                    ErrorCode::Protocol,
+                    "worker rejected final stream append",
+                ));
+            }
+        };
+        {
+            let mut runtime = self.runtime.lock().await;
+            if let Some(worker) = runtime.worker.as_mut() {
+                let finish = WorkerRequest {
+                    id: Uuid::new_v4(),
+                    generation,
+                    command: WorkerCommand::StreamFinish,
+                };
+                let _ = worker.request(&finish, Duration::from_secs(30)).await;
+            }
+        }
+
+        let live_transcript =
+            live_transcript.unwrap_or_else(|| Arc::new(Mutex::new(LiveTranscript::default())));
+        let (raw_text, final_update, processed_suffix, target, insertion_active) = {
+            let mut live = live_transcript
+                .lock()
+                .map_err(|_| internal("live transcript state is poisoned"))?;
+            live.language = language.clone();
+            live.latency_ms = latency_ms;
+            live.backend = Some(backend.clone());
+            let update = live.stabilizer.finish(Some(&hypothesis));
+            let processed_suffix = live
+                .processor
+                .as_mut()
+                .map(|processor| processor.finish(&update.committed_delta))
+                .unwrap_or_default();
+            (
+                live.stabilizer.committed(),
+                update,
+                processed_suffix,
+                live.target.clone(),
+                live.insertion_status == "active",
+            )
+        };
+        if !final_update.committed_delta.is_empty() {
+            self.emit(
+                "transcription.commit",
+                json!({
+                    "generation": generation,
+                    "delta": final_update.committed_delta,
+                    "committed": final_update.committed,
+                    "final": true,
+                }),
+            );
+        }
+        if raw_text.trim().is_empty() {
+            return Err(RpcError::new(
+                ErrorCode::TranscriptionFailed,
+                "transcription returned no text",
+            ));
+        }
+        if insertion_active {
+            if processed_suffix.is_empty() {
+                if let Ok(mut live) = live_transcript.lock() {
+                    live.insertion_status = "complete".into();
+                }
+            } else {
+                let insertion = match target {
+                    Some(target) => {
+                        openwhisper_core::clipboard::insert_x11_delta(&target, &processed_suffix)
+                            .await
+                    }
+                    None => Err(openwhisper_core::clipboard::ClipboardError::InsertionUnavailable),
+                };
+                let mut live = live_transcript
+                    .lock()
+                    .map_err(|_| internal("live transcript state is poisoned"))?;
+                match insertion {
+                    Ok(()) => {
+                        live.inserted_bytes += processed_suffix.len() as u64;
+                        live.insertion_status = "complete".into();
+                    }
+                    Err(error) => {
+                        live.insertion_status = "suspended".into();
+                        self.emit(
+                            "insertion.state",
+                            json!({
+                                "generation": generation,
+                                "status": "suspended",
+                                "reason": error.to_string(),
+                            }),
+                        );
+                    }
+                }
+            }
+        }
+        let (insertion_status, inserted_bytes) = live_transcript
+            .lock()
+            .map(|live| (live.insertion_status.clone(), live.inserted_bytes))
+            .map_err(|_| internal("live transcript state is poisoned"))?;
+        self.deliver_stream_text(
+            session_id,
+            generation,
+            mode,
+            audio_path,
+            config,
+            raw_text,
+            language,
+            latency_ms,
+            backend,
+            insertion_status,
+            inserted_bytes,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_stream_text(
+        &self,
+        session_id: Uuid,
+        generation: u64,
+        mode: Mode,
+        audio_path: &std::path::Path,
+        config: AppConfig,
+        raw_text: String,
+        detected_language: String,
+        latency_ms: u64,
+        backend: BackendReport,
+        insertion_status: String,
+        inserted_bytes: u64,
+    ) -> Result<(), RpcError> {
+        {
+            let mut capture = self
+                .capture
+                .lock()
+                .map_err(|_| internal("capture state is poisoned"))?;
+            capture.begin_processing(generation).map_err(conflict)?;
+            self.emit(
+                "recording.changed",
+                serde_json::to_value(capture.state()).map_err(internal)?,
+            );
+        }
+        let replacements = self
+            .store
+            .list_strings("replacements")
+            .map_err(internal)?
+            .into_iter()
+            .filter_map(|(from, to)| to.map(|to| (from, to)))
+            .collect();
+        let final_text = TextProcessor::with_replacements(replacements).process(&raw_text, mode);
+        {
+            let mut capture = self
+                .capture
+                .lock()
+                .map_err(|_| internal("capture state is poisoned"))?;
+            capture.begin_delivery(generation).map_err(conflict)?;
+            self.emit(
+                "recording.changed",
+                serde_json::to_value(capture.state()).map_err(internal)?,
+            );
+        }
+        let duration_ms = std::fs::metadata(audio_path)
+            .map(|meta| meta.len().saturating_sub(44) * 1000 / 32_000)
+            .unwrap_or(0);
+        let mut warnings = Vec::new();
+        let history_id = if config.history.enabled {
+            match self.store.add_history(HistoryInput {
+                raw_text: raw_text.clone(),
+                final_text: final_text.clone(),
+                mode,
+                language: detected_language.clone(),
+                duration_ms,
+                inserted: inserted_bytes > 0,
+                source: "microphone".into(),
+            }) {
+                Ok(entry) => Some(entry.id),
+                Err(error) => {
+                    warnings.push(format!("History was not saved: {error}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let copied = if config.delivery.clipboard || insertion_status != "not_requested" {
+            match openwhisper_core::clipboard::copy_text(&final_text).await {
+                Ok(_) => true,
+                Err(error) => {
+                    warnings.push(format!("Clipboard delivery failed: {error}. Copy the displayed transcript manually."));
+                    false
+                }
+            }
+        } else {
+            false
+        };
+        warnings.push(format!(
+            "Streaming backend: {}{}; last inference latency: {} ms.",
+            backend.actual,
+            backend
+                .device_name
+                .as_deref()
+                .map(|name| format!(" ({name})"))
+                .unwrap_or_default(),
+            latency_ms,
+        ));
+        if let Some(reason) = &backend.fallback_reason {
+            warnings.push(format!("Backend fallback: {reason}"));
+        }
+        let result = TranscriptionResult {
+            session_id,
+            generation,
+            raw_text,
+            final_text,
+            language: protocol_language(&detected_language),
+            mode: protocol_mode(mode),
+            duration_ms,
+            source: TranscriptionSource::Microphone,
+            history_id,
+            inserted: inserted_bytes > 0,
+            inserted_bytes,
+            insertion_status: parse_insertion_status(&insertion_status),
+            copied,
+            insertion_method: insertion_status.clone(),
+            requested_backend: worker_backend_name(backend.requested).into(),
+            actual_backend: backend.actual.clone(),
+            gpu_device: backend.device_name.clone(),
+            backend_fallback_reason: backend.fallback_reason.clone(),
+            streaming_latency_ms: latency_ms,
+            warnings,
+        };
+        self.emit(
+            "insertion.state",
+            json!({
+                "generation": generation,
+                "status": insertion_status,
+                "inserted_bytes": inserted_bytes,
+            }),
+        );
+        {
+            let mut capture = self
+                .capture
+                .lock()
+                .map_err(|_| internal("capture state is poisoned"))?;
+            if !capture.complete(generation) {
+                return Err(RpcError::new(
+                    ErrorCode::Cancelled,
+                    "stale transcription result was discarded",
+                ));
+            }
+        }
+        self.prune_results();
+        self.results
+            .lock()
+            .map_err(|_| internal("result cache is poisoned"))?
+            .insert(
+                session_id,
+                CachedResult {
+                    completed_at: Instant::now(),
+                    result,
+                },
+            );
+        if let Some(notify) = self
+            .result_ready
+            .lock()
+            .map_err(|_| internal("result waiter is poisoned"))?
+            .remove(&session_id)
+        {
+            notify.notify_waiters();
+        }
+        self.emit(
+            "result.available",
+            json!({"session_id": session_id, "generation": generation}),
+        );
+        self.emit("recording.changed", json!({"phase": "idle"}));
+        Ok(())
+    }
+
     async fn transcribe_and_deliver(
         &self,
         session_id: Uuid,
@@ -579,6 +1647,7 @@ impl DaemonState {
                 model_path: installed.path,
                 audio_path: audio_path.to_string_lossy().into_owned(),
                 language: language.unwrap_or_else(|| config.language.clone()),
+                backend: worker_backend(config.model.backend),
             },
         };
         let response = {
@@ -605,13 +1674,14 @@ impl DaemonState {
                 result => result.map_err(worker_rpc_error)?,
             }
         };
-        let (raw_text, detected_language) = match response {
+        let (raw_text, detected_language, backend) = match response {
             WorkerResponse::Transcript {
                 id,
                 generation: response_generation,
                 text,
                 language,
-            } if id == request.id && response_generation == generation => (text, language),
+                backend,
+            } if id == request.id && response_generation == generation => (text, language, backend),
             WorkerResponse::Error { code, message, .. } => {
                 let mut error = RpcError::new(ErrorCode::TranscriptionFailed, message);
                 error.detail = Some(code);
@@ -711,8 +1781,15 @@ impl DaemonState {
             source,
             history_id,
             inserted: false,
+            inserted_bytes: 0,
+            insertion_status: InsertionStatus::NotRequested,
             copied,
             insertion_method: "clipboard".into(),
+            requested_backend: worker_backend_name(backend.requested).into(),
+            actual_backend: backend.actual,
+            gpu_device: backend.device_name,
+            backend_fallback_reason: backend.fallback_reason,
+            streaming_latency_ms: 0,
             warnings,
         };
         {
@@ -940,14 +2017,13 @@ impl DaemonState {
     }
 
     fn manifest(&self, name: &str) -> Result<BuiltinModelManifest, RpcError> {
-        if name != openwhisper_core::models::BUILTIN_MODEL_NAME {
-            return Err(RpcError::new(
+        let manifest = builtin_model(name).ok_or_else(|| {
+            RpcError::new(
                 ErrorCode::ModelUnavailable,
                 format!("unknown built-in model profile: {name}"),
             )
-            .with_action("Use `openwhisper models list`; only `balanced` is installable in this source build."));
-        }
-        let manifest = builtin_balanced_model();
+            .with_action("Use `openwhisper models list`; choose fast, balanced, or accurate.")
+        })?;
         manifest
             .artifact()
             .validate_for_abi(WORKER_ABI)
@@ -956,41 +2032,59 @@ impl DaemonState {
     }
 
     fn model_list(&self) -> Result<Vec<ModelInfo>, RpcError> {
-        let manifest = builtin_balanced_model();
-        let installed = self
-            .store
-            .installed_model(&manifest.name)
-            .map_err(internal)?;
-        let is_ready = installed
-            .as_ref()
-            .is_some_and(|model| self.registered_model_is_ready(&manifest, model));
-        let selected = self
+        let selected_name = self
             .config
             .read()
             .map_err(|_| internal("config state is poisoned"))?
             .model
             .selected
-            == manifest.name;
-        let installing = self
+            .clone();
+        let installing_name = self
             .model_progress
             .lock()
             .map_err(|_| internal("model progress state is poisoned"))?
-            .is_some();
-        Ok(vec![ModelInfo {
-            name: manifest.name,
-            model_id: manifest.model_id,
-            installed: is_ready,
-            selected,
-            installing,
-            trust: ModelTrust::BuiltinPinned,
-            benchmark_status: BenchmarkStatus::NotRun,
-            source: manifest.source,
-            license: manifest.license,
-            size_bytes: manifest.size_bytes,
-            sha256: manifest.sha256,
-            worker_abi: manifest.worker_abi,
-            path: installed.filter(|_| is_ready).map(|model| model.path),
-        }])
+            .as_ref()
+            .map(|progress| progress.name.clone());
+        builtin_models()
+            .into_iter()
+            .map(|manifest| {
+                let installed = self
+                    .store
+                    .installed_model(&manifest.name)
+                    .map_err(internal)?;
+                let is_ready = installed
+                    .as_ref()
+                    .is_some_and(|model| self.registered_model_is_ready(&manifest, model));
+                let verification_state =
+                    if installing_name.as_deref() == Some(manifest.name.as_str()) {
+                        "installing"
+                    } else if is_ready {
+                        "verified"
+                    } else if installed.is_some() {
+                        "corrupt"
+                    } else {
+                        "missing"
+                    };
+                Ok(ModelInfo {
+                    selected: selected_name == manifest.name,
+                    installing: installing_name.as_deref() == Some(manifest.name.as_str()),
+                    name: manifest.name,
+                    model_id: manifest.model_id,
+                    installed: is_ready,
+                    trust: ModelTrust::BuiltinPinned,
+                    benchmark_status: BenchmarkStatus::NotRun,
+                    source: manifest.source,
+                    license: manifest.license,
+                    size_bytes: manifest.size_bytes,
+                    sha256: manifest.sha256,
+                    worker_abi: manifest.worker_abi,
+                    artifact_name: manifest.artifact_name,
+                    pinned_revision: manifest.pinned_revision,
+                    verification_state: verification_state.into(),
+                    path: installed.filter(|_| is_ready).map(|model| model.path),
+                })
+            })
+            .collect()
     }
 
     async fn model_install(&self, params: Value) -> Result<Value, RpcError> {
@@ -1019,6 +2113,7 @@ impl DaemonState {
 
         let mut last_emitted = 0_u64;
         let state = self.clone();
+        let manifest_name = manifest.name.clone();
         let outcome = download_model(
             &manifest.artifact(),
             &manifest.source,
@@ -1031,7 +2126,7 @@ impl DaemonState {
                 {
                     last_emitted = downloaded_bytes;
                     let progress = ModelDownloadProgress {
-                        name: openwhisper_core::models::BUILTIN_MODEL_NAME.into(),
+                        name: manifest_name.clone(),
                         downloaded_bytes,
                         total_bytes,
                     };
@@ -1299,6 +2394,17 @@ impl DaemonState {
     }
 
     fn ensure_model_operation_idle(&self) -> Result<(), RpcError> {
+        if self
+            .model_progress
+            .lock()
+            .ok()
+            .is_some_and(|progress| progress.is_some())
+        {
+            return Err(RpcError::new(
+                ErrorCode::Conflict,
+                "model and backend changes are disabled during installation",
+            ));
+        }
         let capture = self
             .capture
             .lock()
@@ -1338,6 +2444,25 @@ impl DaemonState {
         if !self.paths.worker_executable().is_file() {
             blockers.push(openwhisper_protocol::ReadinessBlocker { capability: "worker".into(), code: "worker_unavailable".into(), detail: "The persistent native worker executable is missing.".into(), action: "Install the complete OpenWhisper package containing openwhisper, openwhisperd, and openwhisper-worker-native.".into() });
         }
+        let requested_backend = self
+            .config
+            .read()
+            .ok()
+            .map(|config| config.model.backend)
+            .unwrap_or(InferenceBackend::Auto);
+        if let Err(error) = self.backend_report(requested_backend) {
+            blockers.push(openwhisper_protocol::ReadinessBlocker {
+                capability: "accelerator".into(),
+                code: "backend_unavailable".into(),
+                detail: error,
+                action: if requested_backend == InferenceBackend::Vulkan {
+                    "Make Vulkan available to whisper.cpp or select `model.backend = \"cpu\"`."
+                        .into()
+                } else {
+                    "Select the CPU backend and retry.".into()
+                },
+            });
+        }
         if self
             .model_progress
             .lock()
@@ -1347,7 +2472,7 @@ impl DaemonState {
             blockers.push(openwhisper_protocol::ReadinessBlocker {
                 capability: "model".into(),
                 code: "model_installing".into(),
-                detail: "The balanced model is currently downloading or being verified.".into(),
+                detail: "A built-in model is currently downloading or being verified.".into(),
                 action: "Wait for model installation to complete; capture remains disabled during registration.".into(),
             });
         }
@@ -1357,18 +2482,19 @@ impl DaemonState {
             .ok()
             .map(|config| config.model.selected.clone())
             .unwrap_or_else(|| "balanced".into());
-        let manifest = builtin_balanced_model();
+        let manifest = builtin_model(&selected);
         match self.store.installed_model(&selected) {
             Ok(Some(model))
-                if selected == manifest.name
-                    && self.registered_model_is_ready(&manifest, &model) => {}
+                if manifest
+                    .as_ref()
+                    .is_some_and(|manifest| self.registered_model_is_ready(manifest, &model)) => {}
             _ => blockers.push(openwhisper_protocol::ReadinessBlocker {
                 capability: "model".into(),
                 code: "verified_model_unavailable".into(),
                 detail: "No built-in pinned, verified model is installed for the selected profile."
                     .into(),
                 action:
-                    "Run `openwhisper models install balanced` or import the exact pinned artifact."
+                    format!("Run `openwhisper models install {selected}` or import the exact pinned artifact.")
                         .into(),
             }),
         }
@@ -1416,7 +2542,7 @@ impl DaemonState {
         })
     }
 
-    fn config_set(&self, params: Value) -> Result<Value, RpcError> {
+    async fn config_set(&self, params: Value) -> Result<Value, RpcError> {
         let key = string_param(&params, "key")?;
         let value = params
             .get("value")
@@ -1524,7 +2650,28 @@ impl DaemonState {
                         RpcError::new(ErrorCode::Configuration, "model.selected must be a string")
                     })?
                     .to_owned();
-                self.update_config(|config| config.model.selected = selected)?;
+                return self.model_select(json!({"name": selected}));
+            }
+            "model.backend" => {
+                let backend = match value.as_str() {
+                    Some("auto") => InferenceBackend::Auto,
+                    Some("vulkan") => InferenceBackend::Vulkan,
+                    Some("cpu") => InferenceBackend::Cpu,
+                    _ => {
+                        return Err(RpcError::new(
+                            ErrorCode::Configuration,
+                            "model.backend must be auto, vulkan, or cpu",
+                        ));
+                    }
+                };
+                self.ensure_model_operation_idle()?;
+                self.update_config(|config| config.model.backend = backend)?;
+                if let Ok(mut probe) = self.backend_probe.lock() {
+                    *probe = None;
+                }
+                if let Some(worker) = self.runtime.lock().await.worker.take() {
+                    let _ = worker.shutdown().await;
+                }
             }
             "model.threads" => {
                 let threads = value
@@ -1536,7 +2683,11 @@ impl DaemonState {
                             "model.threads must be an unsigned 16-bit integer",
                         )
                     })?;
+                self.ensure_model_operation_idle()?;
                 self.update_config(|config| config.model.threads = threads)?;
+                if let Some(worker) = self.runtime.lock().await.worker.take() {
+                    let _ = worker.shutdown().await;
+                }
             }
             "delivery.clipboard" => {
                 let clipboard = value.as_bool().ok_or_else(|| {
@@ -1545,7 +2696,50 @@ impl DaemonState {
                         "delivery.clipboard must be a boolean",
                     )
                 })?;
-                self.update_config(|config| config.delivery.clipboard = clipboard)?;
+                self.update_config(|config| {
+                    config.delivery.clipboard = clipboard;
+                })?;
+            }
+            "delivery.live_insert" => {
+                let live_insert = value.as_bool().ok_or_else(|| {
+                    RpcError::new(
+                        ErrorCode::Configuration,
+                        "delivery.live_insert must be a boolean",
+                    )
+                })?;
+                self.update_config(|config| config.delivery.live_insert = live_insert)?;
+            }
+            "notifications" => {
+                let enabled = value.as_bool().ok_or_else(|| {
+                    RpcError::new(ErrorCode::Configuration, "notifications must be a boolean")
+                })?;
+                self.update_config(|config| config.notifications = enabled)?;
+            }
+            "overlay" => {
+                let overlay = match value.as_str() {
+                    Some("auto") => OverlayMode::Auto,
+                    Some("always") => OverlayMode::Always,
+                    Some("never") => OverlayMode::Never,
+                    _ => {
+                        return Err(RpcError::new(
+                            ErrorCode::Configuration,
+                            "overlay must be auto, always, or never",
+                        ));
+                    }
+                };
+                self.update_config(|config| config.overlay = overlay)?;
+            }
+            "sounds.start" | "sounds.stop" => {
+                let enabled = value.as_bool().ok_or_else(|| {
+                    RpcError::new(ErrorCode::Configuration, format!("{key} must be a boolean"))
+                })?;
+                self.update_config(|config| {
+                    if key == "sounds.start" {
+                        config.sounds.start = enabled;
+                    } else {
+                        config.sounds.stop = enabled;
+                    }
+                })?;
             }
             _ => {
                 return Err(RpcError::new(
@@ -1726,6 +2920,79 @@ fn protocol_mode(mode: Mode) -> TranscriptMode {
     }
 }
 
+fn worker_backend(backend: InferenceBackend) -> WorkerBackend {
+    match backend {
+        InferenceBackend::Auto => WorkerBackend::Auto,
+        InferenceBackend::Vulkan => WorkerBackend::Vulkan,
+        InferenceBackend::Cpu => WorkerBackend::Cpu,
+    }
+}
+
+fn inference_backend_name(backend: InferenceBackend) -> &'static str {
+    match backend {
+        InferenceBackend::Auto => "auto",
+        InferenceBackend::Vulkan => "vulkan",
+        InferenceBackend::Cpu => "cpu",
+    }
+}
+
+fn worker_backend_name(backend: WorkerBackend) -> &'static str {
+    match backend {
+        WorkerBackend::Auto => "auto",
+        WorkerBackend::Vulkan => "vulkan",
+        WorkerBackend::Cpu => "cpu",
+    }
+}
+
+fn parse_insertion_status(status: &str) -> InsertionStatus {
+    match status {
+        "active" => InsertionStatus::Active,
+        "complete" => InsertionStatus::Complete,
+        "suspended" => InsertionStatus::Suspended,
+        "partial" => InsertionStatus::Partial,
+        "failed" => InsertionStatus::Failed,
+        _ => InsertionStatus::NotRequested,
+    }
+}
+
+async fn update_recording_notification(
+    level: openwhisper_core::audio::AudioLevel,
+    elapsed: Duration,
+) {
+    let state = if level.clipping {
+        "CLIPPING"
+    } else if level.signal {
+        "SIGNAL"
+    } else if level.bytes_captured > 0 {
+        "LIVE"
+    } else {
+        "OPEN"
+    };
+    let seconds = elapsed.as_secs();
+    let title = format!("● {state} · {:02}:{:02}", seconds / 60, seconds % 60);
+    let body = format!("{:.1} dBFS · Press Alt+O again to stop.", level.dbfs);
+    let _ = tokio::process::Command::new("dunstify")
+        .args([
+            "-a",
+            "OpenWhisper",
+            "-r",
+            "74691",
+            "-u",
+            if level.clipping { "critical" } else { "normal" },
+            "-t",
+            "0",
+            "-h",
+            "string:x-dunst-stack-tag:openwhisper",
+            &title,
+            &body,
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+}
+
 fn protocol_language(language: &str) -> Language {
     match language {
         "ar" => Language::Ar,
@@ -1756,6 +3023,7 @@ fn provider_catalog(local_ready: bool) -> Value {
 mod tests {
     use super::*;
     use openwhisper_core::CaptureState;
+    use openwhisper_core::models::builtin_balanced_model;
 
     fn daemon() -> (tempfile::TempDir, DaemonState) {
         let temp = tempfile::tempdir().unwrap();
@@ -1803,6 +3071,61 @@ mod tests {
                 .await
                 .unwrap(),
             json!("59")
+        );
+        for (key, value) in [
+            ("notifications", json!(false)),
+            ("overlay", json!("never")),
+            ("sounds.start", json!(false)),
+            ("sounds.stop", json!(false)),
+        ] {
+            daemon
+                .dispatch("config.set", json!({"key": key, "value": value}))
+                .await
+                .unwrap();
+            assert_eq!(
+                daemon
+                    .dispatch("config.get", json!({"key": key}))
+                    .await
+                    .unwrap(),
+                value
+            );
+        }
+        assert!(
+            daemon
+                .dispatch(
+                    "config.set",
+                    json!({"key": "overlay", "value": "sometimes"})
+                )
+                .await
+                .is_err()
+        );
+        daemon
+            .dispatch(
+                "config.set",
+                json!({"key": "delivery.live_insert", "value": false}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            daemon
+                .dispatch("config.get", json!({"key": "delivery.live_insert"}))
+                .await
+                .unwrap(),
+            json!(false)
+        );
+        daemon
+            .dispatch(
+                "config.set",
+                json!({"key": "delivery.clipboard", "value": false}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            daemon
+                .dispatch("config.get", json!({"key": "delivery.live_insert"}))
+                .await
+                .unwrap(),
+            json!(false)
         );
     }
 
@@ -1861,10 +3184,14 @@ mod tests {
             ErrorCode::Usage
         );
         let models = daemon.dispatch("models.list", json!({})).await.unwrap();
-        assert_eq!(models[0]["name"], "balanced");
-        assert_eq!(models[0]["size_bytes"], 574_041_195_u64);
-        assert_eq!(models[0]["trust"], "builtin_pinned");
-        assert_eq!(models[0]["benchmark_status"], "not_run");
+        assert_eq!(models.as_array().unwrap().len(), 3);
+        assert_eq!(models[0]["name"], "fast");
+        assert_eq!(models[1]["name"], "balanced");
+        assert_eq!(models[1]["size_bytes"], 574_041_195_u64);
+        assert_eq!(models[2]["name"], "accurate");
+        assert!(models.as_array().unwrap().iter().all(|model| {
+            model["trust"] == "builtin_pinned" && model["benchmark_status"] == "not_run"
+        }));
         assert_eq!(
             daemon
                 .dispatch("providers.configure", json!({}))

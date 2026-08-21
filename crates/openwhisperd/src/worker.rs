@@ -62,7 +62,10 @@ impl WorkerSupervisor {
             input,
             output,
         };
-        match supervisor.read_response(0, Duration::from_secs(2)).await? {
+        match supervisor
+            .read_response(0, None, Duration::from_secs(2))
+            .await?
+        {
             WorkerResponse::Ready { abi } if abi == WORKER_ABI => Ok(supervisor),
             WorkerResponse::Ready { abi } => Err(SupervisorError::IncompatibleAbi(abi)),
             _ => Err(SupervisorError::IncompatibleAbi(
@@ -83,7 +86,8 @@ impl WorkerSupervisor {
         self.input.write_all(&payload).await?;
         self.input.write_all(b"\n").await?;
         self.input.flush().await?;
-        self.read_response(request.generation, timeout).await
+        self.read_response(request.generation, Some(request.id), timeout)
+            .await
     }
 
     pub async fn restart(&mut self) -> Result<(), SupervisorError> {
@@ -102,6 +106,7 @@ impl WorkerSupervisor {
     async fn read_response(
         &mut self,
         generation: u64,
+        request_id: Option<uuid::Uuid>,
         timeout: Duration,
     ) -> Result<WorkerResponse, SupervisorError> {
         let deadline = Instant::now() + timeout;
@@ -114,7 +119,9 @@ impl WorkerSupervisor {
                 return Err(SupervisorError::Oversized);
             }
             let response: WorkerResponse = serde_json::from_str(&line)?;
-            if generation == 0 || response.generation() == Some(generation) {
+            if generation == 0
+                || (response.generation() == Some(generation) && response.id() == request_id)
+            {
                 return Ok(response);
             }
         }
